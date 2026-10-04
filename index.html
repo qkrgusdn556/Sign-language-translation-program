@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>수어 번역 프로토타입</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div><p class="eyebrow">수어 인식 실험실</p><h1>손모양 학습</h1></div>
+        <span class="local-badge">영상 전송 없음 · 기기 내 처리</span>
+      </header>
+      <section class="stage" aria-label="카메라 인식 화면">
+        <div class="video-wrap">
+          <video id="camera" playsinline autoplay muted></video>
+          <canvas id="overlay" aria-hidden="true"></canvas>
+          <div id="cameraEmpty"><span class="camera-symbol" aria-hidden="true">◉</span><strong>카메라 대기 중</strong></div>
+          <label class="overlay-option"><input id="overlayToggle" type="checkbox" checked /> 관절 표시</label>
+        </div>
+
+        <aside class="result-panel">
+          <div>
+            <p class="eyebrow">손모양 예측</p>
+            <h2 id="prediction" aria-live="polite">대기 중</h2>
+            <p id="confidence">수어 이름별 샘플이 3개 이상 필요합니다.</p>
+          </div>
+          <div>
+            <div class="meter-label"><span>샘플 유사도</span><strong id="similarity">0%</strong></div>
+            <div class="meter" aria-hidden="true"><span id="confidenceBar"></span></div>
+            <p class="model-note">유사도는 번역 정확도가 아닙니다. 현재는 저장한 손모양만 비교하며 문장·동작·표정은 번역하지 않습니다.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="controls" aria-label="학습 및 기록 도구">
+        <div class="control-group">
+          <label for="labelInput">수어 이름</label>
+          <input id="labelInput" type="text" value="안녕하세요" maxlength="40" autocomplete="off" />
+        </div>
+
+        <div class="button-row">
+          <button id="startBtn" type="button">카메라 시작</button>
+          <button id="sampleBtn" type="button" disabled>샘플 저장</button>
+          <button id="recordBtn" type="button" disabled>2초 수집</button>
+        </div>
+
+        <div class="status-grid">
+          <div>
+            <span>저장 샘플</span>
+            <strong id="sampleCount">0</strong>
+          </div>
+          <div>
+            <span>추적 상태</span>
+            <strong id="trackingState">준비</strong>
+          </div>
+          <div>
+            <span>저장 위치</span>
+            <strong>브라우저</strong>
+          </div>
+        </div>
+      </section>
+      <progress id="captureProgress" max="1" value="0" aria-label="샘플 수집 진행" hidden></progress>
+      <div id="notice" class="notice" hidden>
+        <span id="noticeText" role="status" aria-live="polite"></span>
+        <button id="undoBtn" type="button" hidden>되돌리기</button>
+      </div>
+
+      <section class="samples-panel" aria-labelledby="samplesTitle">
+        <div class="section-head">
+          <h2 id="samplesTitle">저장된 수어</h2>
+          <div class="button-row">
+            <button id="exportBtn" type="button">백업 저장</button>
+            <button id="importBtn" type="button">백업 불러오기</button>
+            <button id="clearBtn" type="button" class="danger">전체 삭제</button>
+          </div>
+        </div>
+        <input id="importFile" type="file" accept=".json,application/json" hidden />
+        <div id="labels" class="sample-list"></div>
+      </section>
+
+      <section class="avatar-panel" aria-label="3D 아바타 화면">
+        <div class="avatar-head">
+          <div>
+            <p class="eyebrow">3D 아바타</p>
+            <h2>실시간 아바타</h2>
+          </div>
+          <p id="avatarState" role="status">불러오는 중</p>
+        </div>
+        <div class="avatar-wrap">
+          <canvas id="avatarCanvas" role="img" aria-label="손동작을 따라 하는 사람형 3D 아바타"></canvas>
+        </div>
+      </section>
+    </main>
+    <dialog id="clearDialog" aria-labelledby="clearTitle" aria-describedby="clearDescription">
+      <h2 id="clearTitle">모든 샘플을 삭제할까요?</h2>
+      <p id="clearDescription">이 브라우저에 저장한 샘플이 삭제됩니다. 필요한 데이터는 먼저 백업해 주세요.</p>
+      <div class="button-row">
+        <button id="clearCancel" type="button" autofocus>취소</button>
+        <button id="clearConfirm" type="button" class="danger">전체 삭제</button>
+      </div>
+    </dialog>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

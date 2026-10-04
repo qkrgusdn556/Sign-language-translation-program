@@ -1,0 +1,664 @@
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots } from "./recognition.js";
+
+let THREE, createHuman, segment, connect, poseArms;
+let HAND_CONNECTIONS = [];
+let icons;
+
+const els = {
+  video: document.querySelector("#camera"),
+  canvas: document.querySelector("#overlay"),
+  prediction: document.querySelector("#prediction"),
+  confidence: document.querySelector("#confidence"),
+  confidenceBar: document.querySelector("#confidenceBar"),
+  labelInput: document.querySelector("#labelInput"),
+  startBtn: document.querySelector("#startBtn"),
+  sampleBtn: document.querySelector("#sampleBtn"),
+  recordBtn: document.querySelector("#recordBtn"),
+  clearBtn: document.querySelector("#clearBtn"),
+  sampleCount: document.querySelector("#sampleCount"),
+  trackingState: document.querySelector("#trackingState"),
+  labels: document.querySelector("#labels"),
+  avatarCanvas: document.querySelector("#avatarCanvas"),
+  avatarState: document.querySelector("#avatarState"),
+  cameraEmpty: document.querySelector("#cameraEmpty"),
+  notice: document.querySelector("#notice"),
+  noticeText: document.querySelector("#noticeText"),
+  undoBtn: document.querySelector("#undoBtn"),
+  exportBtn: document.querySelector("#exportBtn"),
+  importBtn: document.querySelector("#importBtn"),
+  importFile: document.querySelector("#importFile"),
+  clearDialog: document.querySelector("#clearDialog"),
+  clearConfirm: document.querySelector("#clearConfirm"),
+  captureProgress: document.querySelector("#captureProgress"),
+  similarity: document.querySelector("#similarity"),
+  overlayToggle: document.querySelector("#overlayToggle"),
+};
+
+const state = {
+  landmarker: null,
+  avatar: null,
+  running: false,
+  starting: false,
+  importing: false,
+  stream: null,
+  frameId: 0,
+  lastVideoTime: -1,
+  lastFrameAt: 0,
+  lastVector: null,
+  slots: [null, null],
+  samples: [],
+  recording: null,
+  undo: null,
+  storageBlocked: false,
+  stabilizer: createStabilizer(),
+};
+
+els.startBtn.addEventListener("click", () => state.running ? stopCamera() : startCamera());
+els.sampleBtn.addEventListener("click", () => addSample(els.labelInput.value));
+els.recordBtn.addEventListener("click", recordSequence);
+els.clearBtn.addEventListener("click", () => els.clearDialog.showModal());
+els.clearConfirm.addEventListener("click", clearSamples);
+document.querySelector("#clearCancel").addEventListener("click", () => els.clearDialog.close());
+els.labelInput.addEventListener("input", updateControls);
+els.exportBtn.addEventListener("click", exportSamples);
+els.importBtn.addEventListener("click", () => els.importFile.click());
+els.importFile.addEventListener("change", importSamples);
+els.undoBtn.addEventListener("click", undoSamples);
+els.overlayToggle.addEventListener("change", () => { els.canvas.hidden = !els.overlayToggle.checked; });
+window.addEventListener("pagehide", () => stopCamera());
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && (state.running || state.recording)) stopCamera("화면을 벗어나 카메라를 중지했습니다.");
+});
+
+state.samples = loadSamples();
+updateSampleUi();
+loadAvatar();
+loadIcons();
+
+async function loadIcons() {
+  try {
+    icons = await import("https://cdn.jsdelivr.net/npm/lucide@0.468.0/+esm");
+    for (const [id, name] of [["exportBtn", "Download"], ["importBtn", "Upload"], ["undoBtn", "Undo2"], ["clearBtn", "Trash2"]]) {
+      els[id].prepend(icons.createElement(icons[name], { width: 16, height: 16, "aria-hidden": "true" }));
+    }
+    document.querySelector(".camera-symbol").replaceChildren(icons.createElement(icons.Camera, { width: 32, height: 32, "aria-hidden": "true" }));
+    updateSampleUi();
+  } catch { /* Text controls remain available if the optional icon CDN is offline. */ }
+}
+
+async function loadAvatar() {
+  try {
+    THREE = await import("https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js");
+    ({ createHuman, segment, connect, poseArms } = await import("./humanoid.js"));
+    initAvatar();
+    requestAnimationFrame(animateAvatar);
+    els.avatarState.textContent = "대기 중";
+  } catch {
+    els.avatarState.textContent = "3D 화면을 불러오지 못했습니다. 네트워크 연결 후 새로고침해 주세요.";
+  }
+}
+
+async function startCamera() {
+  if (state.starting || state.running) return;
+  state.starting = true;
+  updateControls();
+  els.startBtn.textContent = "준비 중";
+  els.trackingState.textContent = "모델 로딩";
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("카메라를 사용할 수 없는 브라우저입니다.");
+    if (!state.landmarker) {
+      const { HandLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
+      HAND_CONNECTIONS = HandLandmarker.HAND_CONNECTIONS;
+      const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm");
+      const options = {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+          delegate: "GPU",
+        },
+        runningMode: "VIDEO", numHands: 2,
+        minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.6,
+      };
+      try {
+        state.landmarker = await HandLandmarker.createFromOptions(vision, options);
+      } catch {
+        options.baseOptions.delegate = "CPU";
+        state.landmarker = await HandLandmarker.createFromOptions(vision, options);
+      }
+    }
+    els.trackingState.textContent = "카메라 연결";
+    state.stream = await navigator.mediaDevices.getUserMedia({ video: {
+      width: { ideal: 960 }, height: { ideal: 540 }, facingMode: "user", frameRate: { ideal: 30, max: 30 },
+    }, audio: false });
+    if (document.hidden) { stopCamera(); return; }
+    els.video.srcObject = state.stream;
+    await els.video.play();
+    if (document.hidden) { stopCamera(); return; }
+    state.stream.getVideoTracks().forEach((track) => track.addEventListener("ended", () => stopCamera("카메라 연결이 끊어졌습니다."), { once: true }));
+    state.running = true;
+    state.lastVideoTime = -1;
+    els.cameraEmpty.hidden = true;
+    els.trackingState.textContent = "손 대기";
+    state.frameId = requestAnimationFrame(loop);
+  } catch (error) {
+    stopCamera();
+    const messages = {
+      NotAllowedError: "카메라 권한이 차단되었습니다. 주소창의 카메라 권한을 허용한 뒤 다시 시작해 주세요.",
+      NotFoundError: "연결된 카메라를 찾지 못했습니다.",
+      NotReadableError: "카메라를 열지 못했습니다. 다른 앱에서 사용 중인지 확인해 주세요.",
+    };
+    notify(messages[error.name] || "카메라 준비에 실패했습니다. 네트워크와 카메라 연결을 확인한 뒤 다시 시도해 주세요.", true);
+  } finally {
+    state.starting = false;
+    updateControls();
+  }
+}
+
+function stopCamera(message) {
+  state.running = false;
+  cancelAnimationFrame(state.frameId);
+  state.stream?.getTracks().forEach((track) => track.stop());
+  state.stream = null;
+  els.video.pause();
+  els.video.srcObject = null;
+  state.lastVector = null;
+  state.slots = [null, null];
+  state.stabilizer.reset();
+  finishRecording(false);
+  els.canvas.getContext("2d").clearRect(0, 0, els.canvas.width, els.canvas.height);
+  els.cameraEmpty.hidden = false;
+  els.trackingState.textContent = "중지";
+  if (state.avatar) { updateAvatar([null, null]); els.avatarState.textContent = "대기 중"; }
+  showPrediction("대기 중", "저장된 손모양과 비교할 준비가 되었습니다.", 0);
+  updateControls();
+  if (message) notify(message);
+}
+
+function loop(now) {
+  if (!state.running) return;
+  try {
+    if (els.video.readyState >= 2 && els.video.currentTime !== state.lastVideoTime && now - state.lastFrameAt >= 45) {
+      state.lastVideoTime = els.video.currentTime;
+      state.lastFrameAt = now;
+      resizeCanvas();
+      const result = state.landmarker.detectForVideo(els.video, now);
+      drawLandmarks(result);
+      state.slots = assignHandSlots(result, state.slots);
+      updateAvatar(state.slots, result);
+      state.lastVector = landmarksToVector(result.landmarks);
+      if (state.lastVector) {
+        els.trackingState.textContent = `${result.landmarks.length}손 추적`;
+        if (state.avatar) els.avatarState.textContent = `${result.landmarks.length}손 연결됨`;
+        predict(state.lastVector, now);
+      } else {
+        state.stabilizer.reset();
+        els.trackingState.textContent = "손 없음";
+        if (state.avatar) els.avatarState.textContent = "손 대기";
+        showPrediction("대기 중", "손이 감지되지 않았습니다.", 0);
+      }
+      captureFrame(now);
+      updateControls();
+    }
+    if (now - state.lastFrameAt > 500 && state.lastVector) {
+      state.lastVector = null;
+      state.slots = [null, null];
+      state.stabilizer.reset();
+      updateAvatar(state.slots);
+      showPrediction("대기 중", "새 카메라 프레임을 기다리고 있습니다.", 0);
+      els.trackingState.textContent = "영상 대기";
+      updateControls();
+    }
+    if (state.recording && now >= state.recording.endAt) finishRecording(true);
+    state.frameId = requestAnimationFrame(loop);
+  } catch {
+    stopCamera();
+    state.landmarker?.close();
+    state.landmarker = null;
+    notify("손 추적이 중단되었습니다. 카메라를 다시 시작해 주세요.", true);
+  }
+}
+
+function resizeCanvas() {
+  const rect = els.canvas.getBoundingClientRect();
+  const width = Math.round(rect.width * devicePixelRatio);
+  const height = Math.round(rect.height * devicePixelRatio);
+
+  if (els.canvas.width !== width || els.canvas.height !== height) {
+    els.canvas.width = width;
+    els.canvas.height = height;
+  }
+}
+
+function drawLandmarks(result) {
+  const ctx = els.canvas.getContext("2d");
+  ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
+  if (!els.overlayToggle.checked) return;
+  // Match object-fit: contain, including letterboxing and the shared CSS mirror.
+  const scale = Math.min(els.canvas.width / els.video.videoWidth, els.canvas.height / els.video.videoHeight);
+  const width = els.video.videoWidth * scale;
+  const height = els.video.videoHeight * scale;
+  const x = (els.canvas.width - width) / 2;
+  const y = (els.canvas.height - height) / 2;
+  ctx.lineWidth = 2 * Math.min(devicePixelRatio, 2);
+  ctx.strokeStyle = "#65dfb3";
+  ctx.fillStyle = "#f5ce91";
+  for (const landmarks of result.landmarks) {
+    ctx.beginPath();
+    for (const connection of HAND_CONNECTIONS) {
+      const a = landmarks[connection.start ?? connection[0]];
+      const b = landmarks[connection.end ?? connection[1]];
+      ctx.moveTo(x + a.x * width, y + a.y * height);
+      ctx.lineTo(x + b.x * width, y + b.y * height);
+    }
+    ctx.stroke();
+    for (const p of landmarks) {
+      ctx.beginPath();
+      ctx.arc(x + p.x * width, y + p.y * height, 3 * Math.min(devicePixelRatio, 2), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function initAvatar() {
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+  const renderer = new THREE.WebGLRenderer({
+    canvas: els.avatarCanvas,
+    alpha: true,
+    antialias: true,
+  });
+
+  camera.position.set(0, 0.3, 5.4);
+  camera.lookAt(0, -0.05, 0);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+  const keyLight = new THREE.DirectionalLight(0xffffff, 2.1);
+  keyLight.position.set(3, 4, 5);
+  scene.add(keyLight);
+  scene.add(new THREE.AmbientLight(0x9fb6aa, 1.4));
+
+  const floor = new THREE.GridHelper(8, 16, 0x2c5541, 0x17251f);
+  floor.position.y = -1.72;
+  scene.add(floor);
+
+  const { body, skin, arms } = createHuman(scene);
+  const handRigs = [createHandRig(skin), createHandRig(skin)];
+  handRigs[0].group.position.set(-1.15, -0.38, 0.75);
+  handRigs[1].group.position.set(1.15, -0.38, 0.75);
+  handRigs.forEach((rig) => scene.add(rig.group));
+  seedIdleHands(handRigs);
+  handRigs.forEach((rig) => {
+    rig.targetPosition = rig.group.position.clone();
+    rig.targetPoints = rig.joints.map((joint) => joint.position.clone());
+    rig.points = rig.joints.map((joint) => joint.position.clone());
+    rig.live = false;
+  });
+
+  state.avatar = {
+    scene,
+    camera,
+    renderer,
+    body,
+    arms,
+    handRigs,
+    hasLiveHands: false,
+    lastTime: 0,
+  };
+}
+
+function createHandRig(material) {
+  const group = new THREE.Group();
+  const joints = Array.from({ length: 21 }, () => {
+    const joint = new THREE.Mesh(new THREE.SphereGeometry(0.038, 16, 10), material);
+    group.add(joint);
+    return joint;
+  });
+
+  const connections = [];
+  for (const start of [1, 5, 9, 13, 17]) {
+    for (let i = start; i < start + 3; i++) connections.push([i, i + 1]);
+  }
+  connections.push([0, 1]);
+  const bones = connections.map(() => {
+    const bone = segment(material, 0.032, 0.04);
+    group.add(bone);
+    return bone;
+  });
+  const palmGeometry = new THREE.BufferGeometry();
+  palmGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(36), 3));
+  palmGeometry.setIndex([0,1,2,0,2,3,0,3,4,0,4,5,6,8,7,6,9,8,6,10,9,6,11,10,
+    0,6,7,0,7,1,1,7,8,1,8,2,2,8,9,2,9,3,3,9,10,3,10,4,4,10,11,4,11,5,5,11,6,5,6,0]);
+  const palm = new THREE.Mesh(palmGeometry, material);
+  group.add(palm);
+  return { group, joints, bones, connections, palm };
+}
+
+function seedIdleHands(handRigs) {
+  const idleHands = [
+    makeIdleHand(-0.22),
+    makeIdleHand(0.22),
+  ];
+  handRigs.forEach((rig, index) => {
+    rig.group.visible = true;
+    const points = idleHands[index];
+    if (index === 0) points.forEach((point) => { point.x *= -1; });
+    setRigPoints(rig, points);
+  });
+}
+
+function makeIdleHand(spread) {
+  const points = Array.from({ length: 21 }, () => new THREE.Vector3());
+  points[0].set(0, 0, 0);
+  const fingerStarts = [1, 5, 9, 13, 17];
+  const xOffsets = [-0.18, -0.12, -0.015, 0.09, 0.18];
+  const heights = [0.34, 0.59, 0.65, 0.59, 0.48];
+
+  fingerStarts.forEach((start, finger) => {
+    for (let i = 0; i < 4; i += 1) {
+      const t = (i + 1) / 4;
+      points[start + i].set(
+        xOffsets[finger] + spread * t * (finger - 2) * 0.08,
+        finger === 0 ? heights[finger] * t : 0.26 + (heights[finger] - 0.26) * i / 3,
+        0.018 * Math.sin(t * Math.PI + finger),
+      );
+    }
+  });
+
+  return points;
+}
+
+function updateAvatar(slots, result) {
+  if (!state.avatar) return;
+  state.avatar.hasLiveHands = slots.some(Boolean);
+  for (let i = 0; i < state.avatar.handRigs.length; i += 1) {
+    const rig = state.avatar.handRigs[i];
+    const hand = slots[i];
+    rig.live = Boolean(hand);
+    if (hand) {
+      const wrist = hand[0];
+      rig.targetPosition.set(THREE.MathUtils.clamp((0.5 - wrist.x) * 3.8, -1.7, 1.7),
+        THREE.MathUtils.clamp((0.56 - wrist.y) * 2.8 - 0.1, -1.0, 1.0), 0.65);
+      const resultIndex = result?.landmarks.indexOf(hand);
+      rig.targetPoints = handToAvatarPoints(result?.worldLandmarks?.[resultIndex] || hand);
+    } else {
+      rig.targetPosition.set(i === 0 ? -1.15 : 1.15, -0.38, 0.75);
+      const points = makeIdleHand(i === 0 ? -0.22 : 0.22);
+      if (i === 0) points.forEach((point) => { point.x *= -1; });
+      rig.targetPoints = points;
+    }
+  }
+}
+
+function handToAvatarPoints(hand) {
+  const wrist = hand[0];
+  const middleBase = hand[9];
+  const scale =
+    Math.hypot(
+      middleBase.x - wrist.x,
+      middleBase.y - wrist.y,
+      middleBase.z - wrist.z,
+    ) || 1;
+
+  return hand.map(
+    (point) =>
+      new THREE.Vector3(
+        ((wrist.x - point.x) / scale) * 0.36,
+        ((wrist.y - point.y) / scale) * 0.36,
+        ((wrist.z - point.z) / scale) * 0.36,
+      ),
+  );
+}
+
+function setRigPoints(rig, points) {
+  for (let i = 0; i < rig.joints.length; i += 1) {
+    rig.joints[i].position.copy(points[i]);
+  }
+
+  rig.connections.forEach(([from, to], index) => connect(rig.bones[index], points[from], points[to]));
+  const normal = new THREE.Vector3().subVectors(points[5], points[0])
+    .cross(new THREE.Vector3().subVectors(points[17], points[0])).normalize().multiplyScalar(0.038);
+  const attribute = rig.palm.geometry.attributes.position;
+  [0, 1, 5, 9, 13, 17].forEach((pointIndex, index) => {
+    const point = points[pointIndex];
+    attribute.setXYZ(index, point.x + normal.x, point.y + normal.y, point.z + normal.z);
+    attribute.setXYZ(index + 6, point.x - normal.x, point.y - normal.y, point.z - normal.z);
+  });
+  attribute.needsUpdate = true;
+  rig.palm.geometry.computeVertexNormals();
+  rig.palm.geometry.computeBoundingSphere();
+}
+
+function animateAvatar(time = 0) {
+  if (!state.avatar) return;
+  requestAnimationFrame(animateAvatar);
+  if (document.hidden) return;
+  const rect = els.avatarCanvas.getBoundingClientRect();
+  if (rect.bottom < 0 || rect.top > innerHeight) return;
+  resizeAvatar();
+  const alpha = 1 - Math.exp(-Math.min(time - state.avatar.lastTime, 100) / 75);
+  state.avatar.lastTime = time;
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  state.avatar.handRigs.forEach((rig, index) => {
+    rig.group.position.lerp(rig.targetPosition, alpha);
+    rig.points.forEach((point, i) => point.lerp(rig.targetPoints[i], alpha));
+    const idleRotation = (index === 0 ? -1 : 1) * (0.18 + (reducedMotion ? 0 : Math.sin(time * 0.0015) * 0.025));
+    rig.group.rotation.z = THREE.MathUtils.lerp(rig.group.rotation.z, rig.live ? 0 : idleRotation, alpha);
+    setRigPoints(rig, rig.points);
+  });
+  poseArms(state.avatar.arms, state.avatar.handRigs);
+  state.avatar.renderer.render(state.avatar.scene, state.avatar.camera);
+}
+
+function resizeAvatar() {
+  const { renderer, camera } = state.avatar;
+  const rect = els.avatarCanvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width));
+  const height = Math.max(1, Math.round(rect.height));
+
+  const pixelWidth = Math.round(width * renderer.getPixelRatio());
+  const pixelHeight = Math.round(height * renderer.getPixelRatio());
+
+  if (els.avatarCanvas.width !== pixelWidth || els.avatarCanvas.height !== pixelHeight) {
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.position.z = Math.max(5.4, 4.7 / camera.aspect);
+    camera.updateProjectionMatrix();
+  }
+}
+
+function addSample(rawLabel) {
+  const label = rawLabel.trim();
+  if (!label || label.length > 40 || !state.lastVector || state.recording || !state.running) return;
+  commitSamples([...state.samples, { label, vector: [...state.lastVector] }], `${label}: 샘플 1개를 저장했습니다.`);
+}
+
+function recordSequence() {
+  if (state.recording) { finishRecording(false); return; }
+  const label = els.labelInput.value.trim();
+  if (!label || label.length > 40 || !state.running || !state.lastVector) return;
+  state.recording = { label, samples: [], endAt: performance.now() + 2000, lastAt: -Infinity };
+  els.captureProgress.hidden = false;
+  els.captureProgress.value = 0;
+  updateControls();
+}
+
+function captureFrame(now) {
+  const recording = state.recording;
+  if (!recording) return;
+  els.captureProgress.value = Math.min(1, 1 - (recording.endAt - now) / 2000);
+  if (now <= recording.endAt && state.lastVector && now - recording.lastAt >= 120) {
+    recording.samples.push({ label: recording.label, vector: [...state.lastVector] });
+    recording.lastAt = now;
+  }
+}
+
+function finishRecording(save) {
+  const recording = state.recording;
+  if (!recording) return;
+  state.recording = null;
+  els.captureProgress.hidden = true;
+  if (save && recording.samples.length) {
+    commitSamples([...state.samples, ...recording.samples], `${recording.label}: 샘플 ${recording.samples.length}개를 저장했습니다.`);
+  } else notify(save ? "손이 감지되지 않아 저장된 샘플이 없습니다." : "샘플 수집을 취소했습니다.");
+  updateControls();
+}
+
+function predict(vector, now) {
+  const result = state.stabilizer.update(classify(vector, state.samples), now);
+  if (result.status === "untrained") showPrediction("학습 필요", "수어 이름별 샘플이 3개 이상 필요합니다.", 0);
+  else if (result.status === "unknown") showPrediction("판단 보류", "저장된 손모양과 다르거나 후보가 비슷합니다.", result.similarity);
+  else if (result.status === "pending") showPrediction("확인 중", "손모양을 비교하고 있습니다.", result.similarity);
+  else showPrediction(result.label, "저장된 손모양과 유사합니다.", result.similarity);
+}
+
+function showPrediction(label, message, confidence) {
+  els.prediction.textContent = label;
+  els.confidence.textContent = message;
+  els.confidenceBar.style.width = `${Math.round(confidence * 100)}%`;
+  els.similarity.textContent = `${Math.round(confidence * 100)}%`;
+}
+
+function updateControls() {
+  const label = els.labelInput.value.trim();
+  const busy = Boolean(state.recording || state.importing);
+  const canCapture = state.running && Boolean(state.lastVector) && label.length > 0 && label.length <= 40 && !state.storageBlocked;
+  els.startBtn.disabled = state.starting;
+  els.startBtn.textContent = state.starting ? "준비 중" : state.running ? "카메라 중지" : "카메라 시작";
+  els.sampleBtn.disabled = !canCapture || busy;
+  els.recordBtn.disabled = !state.recording && (!canCapture || busy);
+  els.recordBtn.textContent = state.recording ? "수집 취소" : "2초 수집";
+  els.labelInput.disabled = busy;
+  els.clearBtn.disabled = busy || !state.samples.length || state.storageBlocked;
+  els.exportBtn.disabled = !state.samples.length;
+  els.importBtn.disabled = busy || state.storageBlocked;
+  els.undoBtn.disabled = busy || !state.undo;
+  els.labels.querySelectorAll("button").forEach((button) => { button.disabled = busy || state.storageBlocked; });
+}
+
+function updateSampleUi() {
+  els.sampleCount.textContent = String(state.samples.length);
+
+  const counts = new Map();
+  for (const sample of state.samples) {
+    counts.set(sample.label, (counts.get(sample.label) || 0) + 1);
+  }
+
+  els.labels.replaceChildren(
+    ...[...counts.entries()].map(([label, count]) => {
+      const item = document.createElement("div");
+      item.className = "sample-row";
+      const name = document.createElement("span");
+      name.textContent = label;
+      const amount = document.createElement("span");
+      amount.className = count >= 3 ? "sample-ready" : "sample-pending";
+      amount.textContent = `${count}개 · ${count >= 3 ? "비교 가능" : "샘플 부족"}`;
+      const button = document.createElement("button");
+      button.className = "icon-button";
+      button.textContent = "×";
+      if (icons) button.replaceChildren(icons.createElement(icons.X, { width: 16, height: 16, "aria-hidden": "true" }));
+      button.title = `${label} 샘플 삭제`;
+      button.setAttribute("aria-label", button.title);
+      button.addEventListener("click", () => commitSamples(state.samples.filter((sample) => sample.label !== label), `${label} 샘플을 삭제했습니다.`));
+      item.append(name, amount, button);
+      return item;
+    }),
+  );
+  if (!counts.size) {
+    const empty = document.createElement("p");
+    empty.className = "empty-samples";
+    empty.textContent = "저장된 샘플 없음";
+    els.labels.append(empty);
+  }
+  updateControls();
+}
+
+function commitSamples(next, message, remember = true) {
+  if (state.storageBlocked) { notify("기존 저장 데이터를 읽지 못해 변경을 중지했습니다.", true); return false; }
+  try {
+    const checked = validateSamples(next);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(checked));
+    if (remember) state.undo = state.samples;
+    state.samples = checked;
+    state.stabilizer.reset();
+    showPrediction("대기 중", "샘플이 변경되었습니다.", 0);
+    updateSampleUi();
+    notify(message);
+    return true;
+  } catch (error) {
+    notify(error.name === "QuotaExceededError" ? "저장 공간이 부족합니다. 백업 후 불필요한 샘플을 정리해 주세요." : error.message, true);
+    return false;
+  }
+}
+
+function loadSamples() {
+  try {
+    return validateSamples(JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"));
+  } catch {
+    state.storageBlocked = true;
+    notify("기존 저장 데이터를 읽지 못했습니다. 원본 보호를 위해 저장·삭제를 잠갔습니다.", true);
+    return [];
+  }
+}
+
+function clearSamples() {
+  els.clearDialog.close();
+  if (state.recording || state.importing) return;
+  commitSamples([], "모든 샘플을 삭제했습니다. 되돌리기로 복구할 수 있습니다.");
+}
+
+function undoSamples() {
+  if (!state.undo || state.recording || state.importing) return;
+  if (commitSamples(state.undo, "직전 변경을 되돌렸습니다.", false)) {
+    state.undo = null;
+    els.undoBtn.hidden = true;
+    updateControls();
+  }
+}
+
+function notify(message, error = false) {
+  els.notice.hidden = false;
+  els.notice.dataset.tone = error ? "error" : "info";
+  els.noticeText.textContent = message;
+  els.undoBtn.hidden = !state.undo;
+}
+
+function exportSamples() {
+  const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), samples: state.samples }, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `sign-samples-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  notify(`${state.samples.length}개 샘플의 백업 파일을 만들었습니다.`);
+}
+
+async function importSamples() {
+  const file = els.importFile.files?.[0];
+  if (!file || state.recording || state.importing) return;
+  state.importing = true;
+  updateControls();
+  try {
+    if (file.size > 16 * 1024 * 1024) throw new Error("16MB 이하의 샘플 파일만 불러올 수 있습니다.");
+    const incoming = validateSamples(JSON.parse(await file.text()));
+    const occurrences = new Map();
+    state.samples.forEach((sample) => {
+      const key = JSON.stringify(sample);
+      occurrences.set(key, (occurrences.get(key) || 0) + 1);
+    });
+    const unique = incoming.filter((sample) => {
+      const key = JSON.stringify(sample);
+      const existing = occurrences.get(key) || 0;
+      if (existing) { occurrences.set(key, existing - 1); return false; }
+      return true;
+    });
+    if (state.samples.length + unique.length > MAX_SAMPLES) throw new Error(`샘플은 최대 ${MAX_SAMPLES}개까지 저장할 수 있습니다.`);
+    if (!unique.length) notify("추가할 새 샘플이 없습니다.");
+    else commitSamples([...state.samples, ...unique], `${unique.length}개 샘플을 추가했습니다. 기존 샘플도 유지됩니다.`);
+  } catch (error) {
+    notify(error instanceof SyntaxError ? "JSON 파일을 읽지 못했습니다. 기존 데이터는 유지됩니다." : error.message, true);
+  } finally {
+    state.importing = false;
+    els.importFile.value = "";
+    updateControls();
+  }
+}
