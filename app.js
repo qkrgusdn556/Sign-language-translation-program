@@ -149,14 +149,20 @@ async function startCamera() {
       }
       if (!state.poseLandmarker) {
         els.trackingState.textContent = "팔 모델 로딩";
-        state.poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+        const poseOptions = {
           baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
-            delegate: "CPU",
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
+            delegate: "GPU",
           },
           runningMode: "VIDEO", numPoses: 1,
-          minPoseDetectionConfidence: 0.45, minPosePresenceConfidence: 0.45, minTrackingConfidence: 0.5,
-        });
+          minPoseDetectionConfidence: 0.35, minPosePresenceConfidence: 0.35, minTrackingConfidence: 0.35,
+        };
+        try {
+          state.poseLandmarker = await PoseLandmarker.createFromOptions(vision, poseOptions);
+        } catch {
+          poseOptions.baseOptions.delegate = "CPU";
+          state.poseLandmarker = await PoseLandmarker.createFromOptions(vision, poseOptions);
+        }
       }
     }
     els.trackingState.textContent = "카메라 연결";

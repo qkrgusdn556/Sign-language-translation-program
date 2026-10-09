@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>Face model smoke test</title>
+<title>Pose model smoke test</title>
 <body>
-<pre id="result">Loading face model (no camera access)...</pre>
+<pre id="result">Loading pose model (no camera access)...</pre>
 <canvas id="frame" width="320" height="240" hidden></canvas>
 <script type="module">
   import { FaceDetector, PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304";
@@ -26,7 +26,7 @@
     if (!Array.isArray(result.detections) || result.detections.length !== 0) throw new Error("Blank frame should have no faces");
     poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
       baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
         delegate: "CPU",
       },
       runningMode: "VIDEO", numPoses: 1,
