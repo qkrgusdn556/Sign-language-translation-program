@@ -24,14 +24,22 @@
           <div>
             <p class="eyebrow">손모양 예측</p>
             <h2 id="prediction" aria-live="polite">대기 중</h2>
-            <p id="confidence">얼굴 기준 샘플이 이름별로 3개 이상 필요합니다.</p>
+            <p id="confidence">어깨 기준 샘플이 이름별로 3개 이상 필요합니다.</p>
           </div>
           <div>
             <div class="meter-label"><span>샘플 유사도</span><strong id="similarity">0%</strong></div>
             <div class="meter" aria-hidden="true"><span id="confidenceBar"></span></div>
-            <p class="model-note">손모양과 얼굴 대비 손 위치를 비교합니다. 유사도는 번역 정확도가 아니며 문장·동작·표정은 번역하지 않습니다.</p>
+            <p class="model-note">손모양과 어깨 대비 손 위치를 비교합니다. 유사도는 번역 정확도가 아니며 문장·동작·표정은 번역하지 않습니다.</p>
           </div>
         </aside>
+      </section>
+
+      <section class="sentence-panel" aria-labelledby="sentenceTitle">
+        <div class="section-head">
+          <div><p class="eyebrow">인식 문장</p><h2 id="sentenceTitle">문장 조합</h2></div>
+          <button id="clearSentenceBtn" type="button" disabled>문장 지우기</button>
+        </div>
+        <p id="sentenceText" class="sentence-text" role="status" aria-live="polite">대기 중</p>
       </section>
 
       <section class="controls" aria-label="학습 및 기록 도구">
@@ -117,6 +125,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="./app.js?v=heavy-gpu-pose-1"></script>
+    <script type="module" src="./app.js?v=sentence-builder-1"></script>
   </body>
 </html>

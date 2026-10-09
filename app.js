@@ -1,4 +1,4 @@
-import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=shoulder-rig-1";
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=sentence-builder-1";
 import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js?v=pose-arm-1";
 
 let THREE, createHuman, segment, connect, poseArms;
@@ -40,6 +40,8 @@ const els = {
   yoloUnloadBtn: document.querySelector("#yoloUnloadBtn"),
   yoloState: document.querySelector("#yoloState"),
   yoloResult: document.querySelector("#yoloResult"),
+  sentenceText: document.querySelector("#sentenceText"),
+  clearSentenceBtn: document.querySelector("#clearSentenceBtn"),
 };
 
 const state = {
@@ -70,6 +72,8 @@ const state = {
   yoloLastAt: 0,
   stillness: createStillnessGate(),
   lastWrists: null,
+  sentenceWords: [],
+  sentenceArmed: true,
 };
 
 els.startBtn.addEventListener("click", () => state.running ? stopCamera() : startCamera());
@@ -86,6 +90,7 @@ els.undoBtn.addEventListener("click", undoSamples);
 els.overlayToggle.addEventListener("change", () => { els.canvas.hidden = !els.overlayToggle.checked; });
 els.yoloLoadBtn.addEventListener("click", loadYolo);
 els.yoloUnloadBtn.addEventListener("click", unloadYolo);
+els.clearSentenceBtn.addEventListener("click", clearSentence);
 window.addEventListener("pagehide", () => stopCamera());
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && (state.running || state.recording)) stopCamera("화면을 벗어나 카메라를 중지했습니다.");
@@ -93,6 +98,7 @@ document.addEventListener("visibilitychange", () => {
 
 state.samples = loadSamples();
 updateSampleUi();
+renderSentence();
 loadAvatar();
 loadIcons();
 
@@ -648,10 +654,34 @@ function finishRecording(save) {
 
 function predict(vector, now) {
   const result = state.stabilizer.update(classify(vector, state.samples), now);
-  if (result.status === "untrained") showPrediction("학습 필요", "얼굴 기준으로 수어 이름별 샘플을 3개 이상 새로 저장해 주세요.", 0);
-  else if (result.status === "unknown") showPrediction("판단 보류", "저장된 손모양과 다르거나 후보가 비슷합니다.", result.similarity);
-  else if (result.status === "pending") showPrediction("확인 중", "손모양을 비교하고 있습니다.", result.similarity);
-  else showPrediction(result.label, "저장된 손모양과 유사합니다.", result.similarity);
+  if (result.status === "untrained") {
+    state.sentenceArmed = true;
+    showPrediction("학습 필요", "어깨 기준으로 수어 이름별 샘플을 3개 이상 새로 저장해 주세요.", 0);
+  } else if (result.status === "unknown") {
+    state.sentenceArmed = true;
+    showPrediction("판단 보류", "저장된 손모양과 다르거나 후보가 비슷합니다.", result.similarity);
+  } else if (result.status === "pending") {
+    state.sentenceArmed = true;
+    showPrediction("확인 중", "손모양을 비교하고 있습니다.", result.similarity);
+  } else {
+    showPrediction(result.label, "저장된 손모양과 유사합니다.", result.similarity);
+    if (state.sentenceArmed || state.sentenceWords.at(-1) !== result.label) {
+      state.sentenceWords.push(result.label);
+      state.sentenceArmed = false;
+      renderSentence();
+    }
+  }
+}
+
+function clearSentence() {
+  state.sentenceWords = [];
+  state.sentenceArmed = true;
+  renderSentence();
+}
+
+function renderSentence() {
+  els.sentenceText.textContent = state.sentenceWords.length ? state.sentenceWords.join(" ") : "대기 중";
+  els.clearSentenceBtn.disabled = !state.sentenceWords.length;
 }
 
 function showPrediction(label, message, confidence) {

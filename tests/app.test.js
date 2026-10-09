@@ -61,7 +61,7 @@ async function setup({ saved = "[]", denied = false, quota = false, faceLandmark
   }, { context });
   await mockVision.link(() => {});
   await mockVision.evaluate();
-  const app = new vm.SourceTextModule(appSource + "\nexport { state, startCamera, stopCamera, loop, addSample, recordSequence, captureFrame, finishRecording, commitSamples, importSamples, undoSamples };", {
+  const app = new vm.SourceTextModule(appSource + "\nexport { state, startCamera, stopCamera, loop, addSample, recordSequence, captureFrame, finishRecording, commitSamples, importSamples, undoSamples, predict, clearSentence };", {
     context, importModuleDynamically: async (specifier) => {
       if (specifier.includes("tasks-vision")) return mockVision;
       throw new Error("3D deliberately unavailable in lifecycle tests");
@@ -181,4 +181,17 @@ test("shoulders are required for capture, and shoulder loss invalidates samples"
   h.api.loop(300);
   assert.equal(h.api.state.lastVector, null);
   assert.equal(h.elements.get("#sampleBtn").disabled, true);
+});
+
+test("stable predictions compose a sentence without repeating a held sign", async () => {
+  const h = await setup();
+  h.api.state.samples = [sample(), sample(), sample()];
+  h.api.predict(vector, 0);
+  h.api.predict(vector, 400);
+  h.api.predict(vector, 800);
+  assert.equal([...h.api.state.sentenceWords].join(" "), "hello");
+  assert.equal(h.elements.get("#sentenceText").textContent, "hello");
+  h.api.clearSentence();
+  assert.equal(h.api.state.sentenceWords.length, 0);
+  assert.equal(h.elements.get("#clearSentenceBtn").disabled, true);
 });

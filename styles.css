@@ -72,6 +72,33 @@ video,
   padding: 24px;
 }
 
+.sentence-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 16px 0;
+  border-block: 1px solid #303538;
+}
+
+.sentence-panel .section-head { margin: 0; }
+
+.sentence-panel .eyebrow { margin-bottom: 6px; }
+
+.sentence-panel h2 { margin: 0; font-size: 1.1rem; }
+
+.sentence-text {
+  min-height: 52px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: #090b0c;
+  color: #f5f3ee;
+  font-size: 1.1rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .eyebrow {
   margin: 0 0 12px;
   color: #92d0b0;
