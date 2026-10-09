@@ -240,18 +240,36 @@ export function poseArmTargets(pose, reference, hands = []) {
   const chains = [[11, 13, 15], [12, 14, 16]].map((indices) => {
     const points = indices.map((index) => pose[index]);
     if (points.some((point) => !point || (point.visibility ?? 1) < 0.5 || (point.presence ?? 1) < 0.5)) return null;
-    const toAvatar = (point) => {
-      const target = avatarWrist(point, reference);
-      return { ...target, source: point };
-    };
-    return { shoulder: toAvatar(points[0]), elbow: toAvatar(points[1]), wrist: toAvatar(points[2]) };
+    return { shoulder: points[0], elbow: points[1], wrist: points[2] };
   }).filter(Boolean);
   if (chains.length !== 2) return null;
   // Avatar is displayed as a mirror, so the smaller avatar x is screen-left.
-  return chains.sort((a, b) => a.shoulder.x - b.shoulder.x).map((chain, index) => {
+  chains.sort((a, b) => avatarWrist(a.shoulder, reference).x - avatarWrist(b.shoulder, reference).x);
+
+  const corrections = chains.flatMap((chain, index) => {
     const handWrist = hands[index]?.[0];
-    if (!handWrist) return chain;
-    const target = avatarWrist(handWrist, reference);
-    return { ...chain, wrist: { ...target, source: handWrist, handAttached: true } };
+    return handWrist ? [{ x: handWrist.x - chain.wrist.x, y: handWrist.y - chain.wrist.y }] : [];
+  });
+  const correction = corrections.length
+    ? corrections.reduce((total, item) => ({ x: total.x + item.x, y: total.y + item.y }), { x: 0, y: 0 })
+    : { x: 0, y: 0 };
+  correction.x /= Math.max(corrections.length, 1);
+  correction.y /= Math.max(corrections.length, 1);
+
+  const alignedPoint = (point) => ({
+    ...point,
+    x: Math.max(0, Math.min(1, point.x + correction.x)),
+    y: Math.max(0, Math.min(1, point.y + correction.y)),
+  });
+  const toTarget = (point, handAttached = false) => ({
+    ...avatarWrist(point, reference), source: point, handAttached,
+  });
+  return chains.map((chain, index) => {
+    const handWrist = hands[index]?.[0];
+    return {
+      shoulder: toTarget(alignedPoint(chain.shoulder)),
+      elbow: toTarget(alignedPoint(chain.elbow)),
+      wrist: toTarget(handWrist || alignedPoint(chain.wrist), Boolean(handWrist)),
+    };
   });
 }
