@@ -5,12 +5,13 @@ import { readFile } from "node:fs/promises";
 
 const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
 const recognitionSource = await readFile(new URL("../recognition.js", import.meta.url), "utf8");
+const yoloSource = await readFile(new URL("../yolo.js", import.meta.url), "utf8");
 const vector = Array.from({ length: 126 }, (_, i) => i < 63 ? i / 63 : 0);
 const sample = () => ({ label: "hello", vector: [...vector] });
 
-async function setup({ saved = "[]", denied = false, quota = false } = {}) {
+async function setup({ saved = "[]", denied = false, quota = false, faces = [], hands = [] } = {}) {
   const elements = new Map();
-  const ctx = { clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {} };
+  const ctx = { clearRect() {}, strokeRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {} };
   function element(id = "") {
     return { id, value: id === "#labelInput" ? "hello" : "", textContent: "", hidden: false, disabled: false,
       style: {}, dataset: {}, children: [], checked: true, files: [], currentTime: 1, readyState: 2,
@@ -43,9 +44,15 @@ async function setup({ saved = "[]", denied = false, quota = false } = {}) {
   const recognition = new vm.SourceTextModule(recognitionSource, { context });
   await recognition.link(() => {});
   await recognition.evaluate();
-  const mockVision = new vm.SyntheticModule(["HandLandmarker", "FilesetResolver"], function () {
+  const yolo = new vm.SourceTextModule(yoloSource, { context });
+  await yolo.link(() => {});
+  await yolo.evaluate();
+  const mockVision = new vm.SyntheticModule(["HandLandmarker", "FaceDetector", "FilesetResolver"], function () {
     this.setExport("HandLandmarker", { HAND_CONNECTIONS: [], createFromOptions: async () => ({
-      detectForVideo() { detects++; return { landmarks: [] }; }, close() {},
+      detectForVideo() { detects++; return { landmarks: hands }; }, close() {},
+    }) });
+    this.setExport("FaceDetector", { createFromOptions: async () => ({
+      detectForVideo() { return { detections: faces }; }, close() {},
     }) });
     this.setExport("FilesetResolver", { forVisionTasks: async () => ({}) });
   }, { context });
@@ -57,10 +64,10 @@ async function setup({ saved = "[]", denied = false, quota = false } = {}) {
       throw new Error("3D deliberately unavailable in lifecycle tests");
     },
   });
-  await app.link(() => recognition);
+  await app.link((specifier) => specifier === "./recognition.js" ? recognition : yolo);
   await app.evaluate();
   return { api: app.namespace, elements, storage, metrics: () => ({ calls, stopped, detects }),
-    setDenied: (value) => { denied = value; }, setClock: (value) => { clock = value; } };
+    setDenied: (value) => { denied = value; }, setFaces: (value) => { faces = value; }, setClock: (value) => { clock = value; } };
 }
 
 test("camera denial re-enables start and a retry can start then release the camera", async () => {
@@ -149,4 +156,23 @@ test("quota failures and invalid existing data cannot silently overwrite saved s
   assert.equal(corrupt.api.state.storageBlocked, true);
   assert.equal(corrupt.api.commitSamples([], "clear"), false);
   assert.equal(corrupt.storage.get("sign-translator-samples"), "{broken");
+});
+
+test("face is required for capture, and face loss invalidates samples immediately", async () => {
+  const hand = Array.from({length:21}, (_,i)=>({x:0.7+i*0.002,y:0.5-i*0.005,z:0}));
+  const h = await setup({ hands: [hand] });
+  await h.api.startCamera();
+  h.api.loop(100);
+  assert.equal(h.api.state.lastVector, null);
+  assert.equal(h.elements.get("#sampleBtn").disabled, true);
+  h.setFaces([{boundingBox:{originX:380,originY:80,width:180,height:210}}]);
+  h.elements.get("#camera").currentTime++;
+  h.api.loop(200);
+  assert.equal(h.api.state.lastVector.length, 130);
+  assert.equal(h.elements.get("#sampleBtn").disabled, false);
+  h.setFaces([]);
+  h.elements.get("#camera").currentTime++;
+  h.api.loop(300);
+  assert.equal(h.api.state.lastVector, null);
+  assert.equal(h.elements.get("#sampleBtn").disabled, true);
 });

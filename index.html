@@ -24,12 +24,12 @@
           <div>
             <p class="eyebrow">손모양 예측</p>
             <h2 id="prediction" aria-live="polite">대기 중</h2>
-            <p id="confidence">수어 이름별 샘플이 3개 이상 필요합니다.</p>
+            <p id="confidence">얼굴 기준 샘플이 이름별로 3개 이상 필요합니다.</p>
           </div>
           <div>
             <div class="meter-label"><span>샘플 유사도</span><strong id="similarity">0%</strong></div>
             <div class="meter" aria-hidden="true"><span id="confidenceBar"></span></div>
-            <p class="model-note">유사도는 번역 정확도가 아닙니다. 현재는 저장한 손모양만 비교하며 문장·동작·표정은 번역하지 않습니다.</p>
+            <p class="model-note">손모양과 얼굴 대비 손 위치를 비교합니다. 유사도는 번역 정확도가 아니며 문장·동작·표정은 번역하지 않습니다.</p>
           </div>
         </aside>
       </section>
@@ -80,13 +80,28 @@
         <div id="labels" class="sample-list"></div>
       </section>
 
+      <section class="yolo-panel" aria-labelledby="yoloTitle">
+        <div class="section-head">
+          <div><p class="eyebrow">정지 수어 분류</p><h2 id="yoloTitle">YOLO11 분류 모델</h2></div>
+          <strong id="yoloState" class="yolo-state">모델 없음</strong>
+        </div>
+        <p class="model-note">수어 이미지로 학습한 YOLO11 분류용 ONNX 모델만 사용합니다. 손이 0.4초 이상 정지했을 때만 브라우저 안에서 단어 후보를 판단합니다.</p>
+        <div class="yolo-controls">
+          <label class="file-control">YOLO11-cls ONNX<input id="yoloModelFile" type="file" accept=".onnx,application/onnx" /></label>
+          <label class="file-control">라벨 .txt 또는 .json<input id="yoloLabelsFile" type="file" accept=".txt,.json,text/plain,application/json" /></label>
+          <button id="yoloLoadBtn" type="button">모델 연결</button>
+          <button id="yoloUnloadBtn" type="button" disabled>연결 해제</button>
+        </div>
+        <p id="yoloResult" class="yolo-result" role="status">손이 정지하면 YOLO11 결과가 이곳에 표시됩니다.</p>
+      </section>
+
       <section class="avatar-panel" aria-label="3D 아바타 화면">
         <div class="avatar-head">
           <div>
             <p class="eyebrow">3D 아바타</p>
             <h2>실시간 아바타</h2>
           </div>
-          <p id="avatarState" role="status">불러오는 중</p>
+          <div class="avatar-status"><p id="faceState" role="status">얼굴 대기</p><p id="avatarState" role="status">불러오는 중</p></div>
         </div>
         <div class="avatar-wrap">
           <canvas id="avatarCanvas" role="img" aria-label="손동작을 따라 하는 사람형 3D 아바타"></canvas>

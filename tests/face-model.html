@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Face model smoke test</title>
+<body>
+<pre id="result">Loading face model (no camera access)...</pre>
+<canvas id="frame" width="320" height="240" hidden></canvas>
+<script type="module">
+  import { FaceDetector, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304";
+  const output = document.querySelector("#result");
+  let detector;
+  try {
+    const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm");
+    detector = await FaceDetector.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+        delegate: "CPU",
+      },
+      runningMode: "VIDEO", minDetectionConfidence: 0.6,
+    });
+    const frame = document.querySelector("#frame");
+    const ctx = frame.getContext("2d");
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, frame.width, frame.height);
+    const result = detector.detectForVideo(frame, performance.now());
+    if (!Array.isArray(result.detections) || result.detections.length !== 0) throw new Error("Blank frame should have no faces");
+    output.textContent = "PASS: real FaceDetector model loaded and processed a blank frame. No camera used.";
+  } catch (error) {
+    output.textContent = `FAIL: ${error.message}`;
+  } finally {
+    detector?.close();
+  }
+</script>
+</body>
+</html>
