@@ -86,6 +86,20 @@ video,
 
 .sentence-panel h2 { margin: 0; font-size: 1.1rem; }
 
+.sentence-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.speech-style { display: flex; gap: 10px; align-items: center; margin: 0; padding: 0; border: 0; }
+
+.speech-style legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+
+.speech-style label { display: inline-flex; gap: 5px; align-items: center; color: #d6e0e3; }
+
+.speech-style input { accent-color: #65dfb3; }
+
+.sentence-output { display: grid; gap: 7px; }
+
+.sentence-label { margin: 0; color: #aaa69d; font-size: 0.82rem; font-weight: 700; }
+
 .sentence-text {
   min-height: 52px;
   margin: 0;

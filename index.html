@@ -37,9 +37,24 @@
       <section class="sentence-panel" aria-labelledby="sentenceTitle">
         <div class="section-head">
           <div><p class="eyebrow">인식 문장</p><h2 id="sentenceTitle">문장 조합</h2></div>
-          <button id="clearSentenceBtn" type="button" disabled>문장 지우기</button>
+          <div class="sentence-actions">
+            <fieldset class="speech-style">
+              <legend>말투</legend>
+              <label><input id="politeStyle" type="radio" name="speechStyle" value="polite" checked /> 존댓말</label>
+              <label><input id="casualStyle" type="radio" name="speechStyle" value="casual" /> 반말</label>
+            </fieldset>
+            <button id="polishSentenceBtn" type="button" disabled>문장 다듬기</button>
+            <button id="clearSentenceBtn" type="button" disabled>문장 지우기</button>
+          </div>
         </div>
-        <p id="sentenceText" class="sentence-text" role="status" aria-live="polite">대기 중</p>
+        <div class="sentence-output">
+          <p class="sentence-label">인식 원문</p>
+          <p id="sentenceText" class="sentence-text" role="status" aria-live="polite">대기 중</p>
+        </div>
+        <div class="sentence-output">
+          <p class="sentence-label">다듬은 문장</p>
+          <p id="polishedSentenceText" class="sentence-text" role="status" aria-live="polite">대기 중</p>
+        </div>
       </section>
 
       <section class="controls" aria-label="학습 및 기록 도구">
@@ -125,6 +140,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="./app.js?v=sentence-builder-1"></script>
+    <script type="module" src="./app.js?v=polished-sentence-1"></script>
   </body>
 </html>

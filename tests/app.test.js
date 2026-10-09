@@ -195,3 +195,10 @@ test("stable predictions compose a sentence without repeating a held sign", asyn
   assert.equal(h.api.state.sentenceWords.length, 0);
   assert.equal(h.elements.get("#clearSentenceBtn").disabled, true);
 });
+
+test("sentence polish keeps the original tokens and applies the selected speech style", async () => {
+  const h = await setup();
+  assert.equal(h.api.formatSentence(["나", "학교", "가다"], "polite"), "저는 학교 가요.");
+  assert.equal(h.api.formatSentence(["나", "학교", "가다"], "casual"), "나는 학교 가.");
+  assert.equal(h.api.formatSentence(["안녕하세요"], "polite"), "안녕하세요.");
+});

@@ -42,6 +42,10 @@ const els = {
   yoloResult: document.querySelector("#yoloResult"),
   sentenceText: document.querySelector("#sentenceText"),
   clearSentenceBtn: document.querySelector("#clearSentenceBtn"),
+  polishSentenceBtn: document.querySelector("#polishSentenceBtn"),
+  polishedSentenceText: document.querySelector("#polishedSentenceText"),
+  politeStyle: document.querySelector("#politeStyle"),
+  casualStyle: document.querySelector("#casualStyle"),
 };
 
 const state = {
@@ -74,6 +78,8 @@ const state = {
   lastWrists: null,
   sentenceWords: [],
   sentenceArmed: true,
+  speechStyle: "polite",
+  polishedSentence: "",
 };
 
 els.startBtn.addEventListener("click", () => state.running ? stopCamera() : startCamera());
@@ -91,6 +97,9 @@ els.overlayToggle.addEventListener("change", () => { els.canvas.hidden = !els.ov
 els.yoloLoadBtn.addEventListener("click", loadYolo);
 els.yoloUnloadBtn.addEventListener("click", unloadYolo);
 els.clearSentenceBtn.addEventListener("click", clearSentence);
+els.polishSentenceBtn.addEventListener("click", polishCurrentSentence);
+els.politeStyle.addEventListener("change", () => setSpeechStyle("polite"));
+els.casualStyle.addEventListener("change", () => setSpeechStyle("casual"));
 window.addEventListener("pagehide", () => stopCamera());
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && (state.running || state.recording)) stopCamera("화면을 벗어나 카메라를 중지했습니다.");
@@ -668,6 +677,7 @@ function predict(vector, now) {
     if (state.sentenceArmed || state.sentenceWords.at(-1) !== result.label) {
       state.sentenceWords.push(result.label);
       state.sentenceArmed = false;
+      state.polishedSentence = "";
       renderSentence();
     }
   }
@@ -676,12 +686,37 @@ function predict(vector, now) {
 function clearSentence() {
   state.sentenceWords = [];
   state.sentenceArmed = true;
+  state.polishedSentence = "";
   renderSentence();
+}
+
+function setSpeechStyle(style) {
+  state.speechStyle = style;
+  if (state.polishedSentence) polishCurrentSentence();
+}
+
+function polishCurrentSentence() {
+  state.polishedSentence = formatSentence(state.sentenceWords, state.speechStyle);
+  renderSentence();
+}
+
+export function formatSentence(words, speechStyle) {
+  if (!words.length) return "";
+  const opening = speechStyle === "polite" ? { "나": "저는" } : { "나": "나는" };
+  const endings = speechStyle === "polite"
+    ? { "가다": "가요", "오다": "와요", "먹다": "먹어요", "마시다": "마셔요", "하다": "해요", "보다": "봐요", "있다": "있어요", "없다": "없어요", "알다": "알아요", "모르다": "몰라요", "이다": "예요" }
+    : { "가다": "가", "오다": "와", "먹다": "먹어", "마시다": "마셔", "하다": "해", "보다": "봐", "있다": "있어", "없다": "없어", "알다": "알아", "모르다": "몰라", "이다": "야" };
+  const sentence = words.map((word, index) => index === 0 ? (opening[word] || word) : word);
+  sentence[sentence.length - 1] = endings[sentence.at(-1)] || sentence.at(-1);
+  const text = sentence.join(" ").replace(/[.?!]+$/, "");
+  return `${text}.`;
 }
 
 function renderSentence() {
   els.sentenceText.textContent = state.sentenceWords.length ? state.sentenceWords.join(" ") : "대기 중";
+  els.polishedSentenceText.textContent = state.polishedSentence || "대기 중";
   els.clearSentenceBtn.disabled = !state.sentenceWords.length;
+  els.polishSentenceBtn.disabled = !state.sentenceWords.length;
 }
 
 function showPrediction(label, message, confidence) {
