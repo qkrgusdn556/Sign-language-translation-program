@@ -1,4 +1,4 @@
-import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, faceReference, poseFaceReference, createFaceTracker, avatarWrist, poseArmTargets } from "./recognition.js?v=face-stable-1";
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, selectFaceReference, createFaceTracker, avatarWrist, poseArmTargets } from "./recognition.js?v=face-pose-verify-1";
 import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js?v=pose-arm-1";
 
 let THREE, createHuman, segment, connect, poseArms;
@@ -158,18 +158,18 @@ async function startCamera() {
             modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
             delegate: "CPU",
           },
-          runningMode: "VIDEO", minDetectionConfidence: 0.45,
+          runningMode: "VIDEO", minDetectionConfidence: 0.65,
         });
       }
       if (!state.poseLandmarker) {
         els.trackingState.textContent = "팔 모델 로딩";
         state.poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
             delegate: "CPU",
           },
           runningMode: "VIDEO", numPoses: 1,
-          minPoseDetectionConfidence: 0.6, minPosePresenceConfidence: 0.6, minTrackingConfidence: 0.6,
+          minPoseDetectionConfidence: 0.45, minPosePresenceConfidence: 0.45, minTrackingConfidence: 0.5,
         });
       }
     }
@@ -184,6 +184,8 @@ async function startCamera() {
     state.stream.getVideoTracks().forEach((track) => track.addEventListener("ended", () => stopCamera("카메라 연결이 끊어졌습니다."), { once: true }));
     state.running = true;
     state.lastVideoTime = -1;
+    state.lastPoseAt = 0;
+    state.lastFaceAt = 0;
     els.cameraEmpty.hidden = true;
     els.trackingState.textContent = "손 대기";
     state.frameId = requestAnimationFrame(loop);
@@ -251,6 +253,8 @@ function stopCamera(message) {
   state.face = null;
   state.faceTracker.reset();
   state.detectedFaces = [];
+  state.lastPoseAt = 0;
+  state.lastFaceAt = 0;
   state.pose = null;
   state.poseArms = null;
   state.stillness.reset();
@@ -285,9 +289,7 @@ function loop(now) {
         state.detectedFaces = state.faceDetector.detectForVideo(els.video, now).detections;
       }
       const faces = state.detectedFaces;
-      const faceCandidate = faces.length === 1
-        ? faceReference(faces, els.video.videoWidth, els.video.videoHeight)
-        : faces.length === 0 ? poseFaceReference(state.pose, els.video.videoWidth, els.video.videoHeight) : null;
+      const faceCandidate = selectFaceReference(faces, state.pose, els.video.videoWidth, els.video.videoHeight);
       if (faces.length > 1) {
         state.faceTracker.reset();
         state.face = null;

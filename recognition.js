@@ -148,6 +148,17 @@ export function poseFaceReference(pose, width, height) {
   };
 }
 
+export function selectFaceReference(detections, pose, width, height) {
+  if (detections.length > 1) return null;
+  const detected = faceReference(detections, width, height);
+  const fromPose = poseFaceReference(pose, width, height);
+  if (!detected || !fromPose) return detected || fromPose;
+
+  // A face box far from the pose nose is usually a false positive (for example, a hand or background detail).
+  const separation = Math.hypot(detected.x - fromPose.x, detected.y - fromPose.y);
+  return separation <= Math.max(0.18, fromPose.scale * 1.4) ? detected : fromPose;
+}
+
 export function createFaceTracker({ maxLostMs = 420, smoothing = 0.35 } = {}) {
   let face = null;
   let lastSeen = -Infinity;

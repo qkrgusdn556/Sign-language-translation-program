@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateSamples, landmarksToVector, distance, classify, createStabilizer, assignHandSlots, faceReference, poseFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
+import { validateSamples, landmarksToVector, distance, classify, createStabilizer, assignHandSlots, faceReference, poseFaceReference, selectFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
 
 const hand = (x = 0.3) => Array.from({ length: 21 }, (_, i) => ({ x: x + i * 0.003, y: 0.6 - i * 0.008, z: i * -0.002 }));
 const vector = landmarksToVector([hand()]);
@@ -115,6 +115,17 @@ test("pose face fallback smooths brief detector loss without keeping it indefini
   assert.equal(smoothed.x, 0.6);
   assert.equal(tracker.update(null, 300).stale, true);
   assert.equal(tracker.update(null, 500), null);
+});
+
+test("pose reference rejects a face box far from the detected person", () => {
+  const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.99, presence: 0.99 }));
+  pose[0] = { x: 0.55, y: 0.2, visibility: 0.99, presence: 0.99 };
+  pose[11] = { x: 0.72, y: 0.5, visibility: 0.99, presence: 0.99 };
+  pose[12] = { x: 0.38, y: 0.5, visibility: 0.99, presence: 0.99 };
+  const falsePositive = { boundingBox: { originX: 30, originY: 80, width: 120, height: 120 } };
+  const selected = selectFaceReference([falsePositive], pose, 1000, 600);
+  assert.equal(selected.source, "pose");
+  assert.equal(selected.box, null);
 });
 
 test("pose arm targets retain shoulder, elbow and wrist order in mirror space", () => {
