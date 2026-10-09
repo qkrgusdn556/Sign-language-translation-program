@@ -67,6 +67,7 @@ const state = {
   lastPoseAt: 0,
   lastMouthAt: 0,
   mouth: null,
+  mouthLandmarks: null,
   lastVector: null,
   slots: [null, null],
   samples: [],
@@ -218,6 +219,7 @@ async function startCamera() {
     state.lastPoseAt = 0;
     state.lastMouthAt = 0;
     state.mouth = null;
+    state.mouthLandmarks = null;
     els.cameraEmpty.hidden = true;
     els.trackingState.textContent = "손 대기";
     state.frameId = requestAnimationFrame(loop);
@@ -287,6 +289,7 @@ function stopCamera(message) {
   state.lastPoseAt = 0;
   state.lastMouthAt = 0;
   state.mouth = null;
+  state.mouthLandmarks = null;
   state.pose = null;
   state.poseArms = null;
   state.stillness.reset();
@@ -322,6 +325,7 @@ function loop(now) {
         state.lastMouthAt = now;
         const faceResult = state.faceLandmarker.detectForVideo(els.video, now);
         state.mouth = faceResult.faceBlendshapes?.length === 1 ? mouthFeatures(faceResult.faceBlendshapes[0]) : null;
+        state.mouthLandmarks = faceResult.faceLandmarks?.length === 1 ? faceResult.faceLandmarks[0] : null;
       }
       state.slots = assignHandSlots(result, state.slots);
       state.poseArms = poseArmTargets(state.pose, state.shoulders, state.slots);
@@ -333,10 +337,12 @@ function loop(now) {
       state.lastVector = state.shoulders && state.mouth ? landmarksToVector(result.landmarks, state.shoulders, state.mouth) : null;
       if (state.lastVector) {
         if (state.avatar) els.avatarState.textContent = state.poseArms ? `팔·손 ${result.landmarks.length}개 연결됨` : `손 ${result.landmarks.length}개 연결됨 · 팔 대기`;
-        const dynamicResult = updateMotionRecognition(state.lastVector, now);
-        if (dynamicResult) applyRecognition(dynamicResult, "동작");
-        else if (!state.motion.active) predict(state.lastVector, now);
-        evaluateYolo(result.landmarks, now);
+        if (!state.recording) {
+          const dynamicResult = updateMotionRecognition(state.lastVector, now);
+          if (dynamicResult) applyRecognition(dynamicResult, "동작");
+          else if (!state.motion.active) predict(state.lastVector, now);
+          evaluateYolo(result.landmarks, now);
+        }
       } else {
         state.stillness.reset();
         state.lastWrists = null;
@@ -355,6 +361,7 @@ function loop(now) {
       state.pose = null;
       state.poseArms = null;
       state.mouth = null;
+      state.mouthLandmarks = null;
       state.lastMouthAt = 0;
       els.faceState.textContent = "어깨 대기";
       els.mouthState.textContent = "입모양 대기";
@@ -368,7 +375,8 @@ function loop(now) {
     }
     if (state.recording && now >= state.recording.endAt) finishRecording(true);
     state.frameId = requestAnimationFrame(loop);
-  } catch {
+  } catch (error) {
+    console.error("Sign tracking loop failed:", error);
     stopCamera();
     state.landmarker?.close();
     state.landmarker = null;
@@ -445,6 +453,7 @@ function drawLandmarks(result) {
     });
     ctx.strokeStyle = "#65dfb3";
   }
+  if (state.mouthLandmarks) drawMouthOutline(ctx, state.mouthLandmarks, x, y, width, height);
   for (const landmarks of result.landmarks) {
     ctx.beginPath();
     for (const connection of HAND_CONNECTIONS) {
@@ -460,6 +469,30 @@ function drawLandmarks(result) {
       ctx.fill();
     }
   }
+}
+
+function drawMouthOutline(ctx, landmarks, x, y, width, height) {
+  // MediaPipe Face Mesh outer-lip loop. The canvas is mirrored with the video in CSS.
+  const loop = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 78, 61];
+  if (!loop.every((index) => landmarks[index])) return;
+  ctx.save();
+  ctx.strokeStyle = "#ff9b55";
+  ctx.fillStyle = "#ffdc8a";
+  ctx.lineWidth = 2.5 * Math.min(devicePixelRatio, 2);
+  ctx.beginPath();
+  loop.forEach((index, position) => {
+    const point = landmarks[index];
+    const px = x + point.x * width;
+    const py = y + point.y * height;
+    if (position) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+  });
+  ctx.stroke();
+  const upper = landmarks[13], lower = landmarks[14];
+  ctx.beginPath();
+  ctx.arc(x + upper.x * width, y + upper.y * height, 3.5 * Math.min(devicePixelRatio, 2), 0, Math.PI * 2);
+  ctx.arc(x + lower.x * width, y + lower.y * height, 3.5 * Math.min(devicePixelRatio, 2), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function initAvatar() {
@@ -679,6 +712,7 @@ function recordSequence() {
   if (state.recording) { finishRecording(false); return; }
   const label = els.labelInput.value.trim();
   if (!label || label.length > 40 || !state.running || !state.lastVector) return;
+  state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
   state.recording = { label, frames: [], endAt: performance.now() + 2000, lastAt: -Infinity };
   els.captureProgress.hidden = false;
   els.captureProgress.value = 0;
@@ -689,7 +723,7 @@ function captureFrame(now) {
   const recording = state.recording;
   if (!recording) return;
   els.captureProgress.value = Math.min(1, 1 - (recording.endAt - now) / 2000);
-  if (now <= recording.endAt && state.lastVector && now - recording.lastAt >= 80) {
+  if (now <= recording.endAt && state.lastVector && now - recording.lastAt >= 100) {
     recording.frames.push([...state.lastVector]);
     recording.lastAt = now;
   }
