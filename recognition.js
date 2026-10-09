@@ -1,16 +1,22 @@
 export const STORAGE_KEY = "sign-translator-samples";
 export const MAX_SAMPLES = 5000;
+export const MIN_SEQUENCE_FRAMES = 6;
+export const MAX_SEQUENCE_FRAMES = 32;
 
 export function validateSamples(value) {
-  const samples = Array.isArray(value) ? value : [1, 2].includes(value?.version) ? value.samples : null;
+  const samples = Array.isArray(value) ? value : [1, 2, 3].includes(value?.version) ? value.samples : null;
   if (!Array.isArray(samples) || samples.length > MAX_SAMPLES) throw new Error("샘플 파일 형식 또는 개수를 확인해 주세요.");
   return samples.map((sample) => {
-    if (typeof sample?.label !== "string" || !sample.label.trim() || sample.label.trim().length > 40 ||
-      !Array.isArray(sample.vector) || ![126, 130].includes(sample.vector.length) ||
-      !sample.vector.every((n) => typeof n === "number" && Number.isFinite(n) && Math.abs(n) <= 100)) {
+    if (typeof sample?.label !== "string" || !sample.label.trim() || sample.label.trim().length > 40) {
       throw new Error("유효하지 않은 샘플이 있습니다. 기존 데이터는 유지됩니다.");
     }
-    return { label: sample.label.trim(), vector: [...sample.vector] };
+    const validVector = (vector) => Array.isArray(vector) && [126, 130].includes(vector.length) &&
+      vector.every((n) => typeof n === "number" && Number.isFinite(n) && Math.abs(n) <= 100);
+    if (validVector(sample.vector)) return { label: sample.label.trim(), vector: [...sample.vector] };
+    if (Array.isArray(sample.sequence) && sample.sequence.length >= MIN_SEQUENCE_FRAMES && sample.sequence.length <= MAX_SEQUENCE_FRAMES && sample.sequence.every(validVector)) {
+      return { label: sample.label.trim(), sequence: sample.sequence.map((vector) => [...vector]) };
+    }
+    throw new Error("유효하지 않은 샘플이 있습니다. 기존 데이터는 유지됩니다.");
   });
 }
 
@@ -83,6 +89,44 @@ export function classify(vector, samples) {
   const ambiguous = ranked[1] && ranked[1].distance - best.distance < 0.055;
   if (best.distance > 0.3 || ambiguous) return { status: "unknown", similarity };
   return { status: "match", label: best.label, similarity };
+}
+
+export function motionMagnitude(previous, next) {
+  if (!previous || !next || previous.length !== next.length || previous.length < 130) return 0;
+  return Math.hypot(...previous.slice(-4).map((value, index) => next[next.length - 4 + index] - value));
+}
+
+export function dtwDistance(sequenceA, sequenceB) {
+  if (!sequenceA?.length || !sequenceB?.length) return Infinity;
+  const rows = sequenceA.length + 1, columns = sequenceB.length + 1;
+  const matrix = Array.from({ length: rows }, () => Array(columns).fill(Infinity));
+  matrix[0][0] = 0;
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < columns; j += 1) {
+      const cost = distance(sequenceA[i - 1], sequenceB[j - 1]);
+      matrix[i][j] = cost + Math.min(matrix[i - 1][j], matrix[i][j - 1], matrix[i - 1][j - 1]);
+    }
+  }
+  return matrix[rows - 1][columns - 1] / (sequenceA.length + sequenceB.length);
+}
+
+export function classifySequence(sequence, samples) {
+  const eligible = samples.filter((sample) => Array.isArray(sample.sequence) && sample.sequence.length >= MIN_SEQUENCE_FRAMES);
+  const counts = new Map();
+  eligible.forEach((sample) => counts.set(sample.label, (counts.get(sample.label) || 0) + 1));
+  const trained = eligible.filter((sample) => counts.get(sample.label) >= 3);
+  if (!trained.length) return { status: "untrained", similarity: 0 };
+  const grouped = new Map();
+  trained.forEach((sample) => {
+    const value = dtwDistance(sequence, sample.sequence);
+    if (!grouped.has(sample.label)) grouped.set(sample.label, []);
+    grouped.get(sample.label).push(value);
+  });
+  const ranked = [...grouped].map(([label, values]) => ({ label, distance: Math.min(...values) })).sort((a, b) => a.distance - b.distance);
+  const best = ranked[0];
+  const similarity = Math.exp(-best.distance / 0.24);
+  const ambiguous = ranked[1] && ranked[1].distance - best.distance < 0.04;
+  return best.distance > 0.35 || ambiguous ? { status: "unknown", similarity } : { status: "match", label: best.label, similarity };
 }
 
 export function createStabilizer(holdMs = 350) {

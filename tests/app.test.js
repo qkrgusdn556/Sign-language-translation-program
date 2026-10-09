@@ -108,18 +108,22 @@ test("a stalled video invalidates the previous hand pose", async () => {
   assert.equal(h.elements.get("#sampleBtn").disabled, true);
 });
 
-test("recording saves only observed frames in a single undoable batch", async () => {
+test("recording saves observed frames as one motion sequence in a single undoable batch", async () => {
   const h = await setup();
   await h.api.startCamera();
   h.api.state.lastVector = vector;
   h.api.recordSequence();
   h.api.captureFrame(0);
-  h.api.captureFrame(50);
   h.api.captureFrame(150);
-  h.api.state.lastVector = null;
   h.api.captureFrame(300);
+  h.api.captureFrame(450);
+  h.api.captureFrame(600);
+  h.api.captureFrame(750);
+  h.api.state.lastVector = null;
+  h.api.captureFrame(900);
   h.api.finishRecording(true);
-  assert.equal(h.api.state.samples.length, 2);
+  assert.equal(h.api.state.samples.length, 1);
+  assert.equal(h.api.state.samples[0].sequence.length, 6);
   h.api.undoSamples();
   assert.equal(h.api.state.samples.length, 0);
 });

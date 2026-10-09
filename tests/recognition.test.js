@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateSamples, landmarksToVector, distance, classify, createStabilizer, assignHandSlots, faceReference, faceLandmarksReference, poseFaceReference, shoulderReference, selectFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
+import { validateSamples, landmarksToVector, distance, classify, classifySequence, motionMagnitude, dtwDistance, createStabilizer, assignHandSlots, faceReference, faceLandmarksReference, poseFaceReference, shoulderReference, selectFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
 
 const hand = (x = 0.3) => Array.from({ length: 21 }, (_, i) => ({ x: x + i * 0.003, y: 0.6 - i * 0.008, z: i * -0.002 }));
 const vector = landmarksToVector([hand()]);
@@ -9,7 +9,8 @@ const samples = (label, v = vector, count = 3) => Array.from({ length: count }, 
 test("legacy and versioned backups are accepted; malformed data is rejected", () => {
   assert.equal(validateSamples(samples("hello")).length, 3);
   assert.equal(validateSamples({ version: 1, samples: samples("hello") }).length, 3);
-  for (const bad of [null, {}, { version: 3, samples: [] }, [{ label: "", vector }], [{ label: "a", vector: [1] }], [{ label: "a", vector: vector.map(() => NaN) }]]) {
+  assert.equal(validateSamples({ version: 3, samples: [] }).length, 0);
+  for (const bad of [null, {}, { version: 4, samples: [] }, [{ label: "", vector }], [{ label: "a", vector: [1] }], [{ label: "a", vector: vector.map(() => NaN) }]]) {
     assert.throws(() => validateSamples(bad));
   }
 });
@@ -30,6 +31,18 @@ test("swapping detector order does not change distance; different hand counts ar
 test("requires three samples per label, not just three samples in total", () => {
   assert.equal(classify(vector, [...samples("a", vector, 1), ...samples("b", vector, 2)]).status, "untrained");
   assert.equal(classify(vector, samples("a")).status, "match");
+});
+
+test("motion sequences use DTW and require three recordings per label", () => {
+  const motionVector = [...vector, 0, 0, 0, 0];
+  const move = Array.from({ length: 6 }, (_, index) => motionVector.map((value, item) => item >= 126 ? value + index * 0.03 : value));
+  const different = move.map((frame) => frame.map((value, item) => item >= 126 ? value + 0.7 : value));
+  const sequenceSamples = (label, sequence, count) => Array.from({ length: count }, () => ({ label, sequence }));
+  assert.equal(classifySequence(move, sequenceSamples("move", move, 2)).status, "untrained");
+  assert.equal(classifySequence(move, sequenceSamples("move", move, 3)).label, "move");
+  assert.ok(dtwDistance(move, move) < 1e-10);
+  assert.ok(motionMagnitude(move[0], move[1]) > 0);
+  assert.ok(dtwDistance(different, move) > dtwDistance(move, move));
 });
 
 test("unknown shapes and ambiguous labels are withheld, including a single-class dataset", () => {

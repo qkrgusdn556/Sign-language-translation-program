@@ -1,4 +1,4 @@
-import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=sentence-builder-1";
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, classifySequence, motionMagnitude, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=motion-dtw-1";
 import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js?v=pose-arm-1";
 
 let THREE, createHuman, segment, connect, poseArms;
@@ -80,6 +80,7 @@ const state = {
   sentenceArmed: true,
   speechStyle: "polite",
   polishedSentence: "",
+  motion: { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] },
 };
 
 els.startBtn.addEventListener("click", () => state.running ? stopCamera() : startCamera());
@@ -234,6 +235,8 @@ function unloadYolo() {
   state.yoloBusy = false;
   state.stillness.reset();
   state.lastWrists = null;
+  state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
+  state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
   els.yoloModelFile.value = "";
   els.yoloLabelsFile.value = "";
   els.yoloResult.textContent = "YOLO11 연결을 해제했습니다.";
@@ -297,11 +300,14 @@ function loop(now) {
       state.lastVector = state.shoulders ? landmarksToVector(result.landmarks, state.shoulders) : null;
       if (state.lastVector) {
         if (state.avatar) els.avatarState.textContent = state.poseArms ? `팔·손 ${result.landmarks.length}개 연결됨` : `손 ${result.landmarks.length}개 연결됨 · 팔 대기`;
-        predict(state.lastVector, now);
+        const dynamicResult = updateMotionRecognition(state.lastVector, now);
+        if (dynamicResult) applyRecognition(dynamicResult, "동작");
+        else if (!state.motion.active) predict(state.lastVector, now);
         evaluateYolo(result.landmarks, now);
       } else {
         state.stillness.reset();
         state.lastWrists = null;
+        state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
         state.stabilizer.reset();
         els.trackingState.textContent = state.shoulders ? "손 없음" : "어깨 대기";
         if (state.avatar) els.avatarState.textContent = state.shoulders ? "손 대기" : "어깨 기준 대기";
@@ -318,6 +324,7 @@ function loop(now) {
       els.faceState.textContent = "어깨 대기";
       state.slots = [null, null];
       state.stabilizer.reset();
+      state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
       updateAvatar(state.slots);
       showPrediction("대기 중", "새 카메라 프레임을 기다리고 있습니다.", 0);
       els.trackingState.textContent = "영상 대기";
@@ -634,7 +641,7 @@ function recordSequence() {
   if (state.recording) { finishRecording(false); return; }
   const label = els.labelInput.value.trim();
   if (!label || label.length > 40 || !state.running || !state.lastVector) return;
-  state.recording = { label, samples: [], endAt: performance.now() + 2000, lastAt: -Infinity };
+  state.recording = { label, frames: [], endAt: performance.now() + 2000, lastAt: -Infinity };
   els.captureProgress.hidden = false;
   els.captureProgress.value = 0;
   updateControls();
@@ -644,8 +651,8 @@ function captureFrame(now) {
   const recording = state.recording;
   if (!recording) return;
   els.captureProgress.value = Math.min(1, 1 - (recording.endAt - now) / 2000);
-  if (now <= recording.endAt && state.lastVector && now - recording.lastAt >= 120) {
-    recording.samples.push({ label: recording.label, vector: [...state.lastVector] });
+  if (now <= recording.endAt && state.lastVector && now - recording.lastAt >= 80) {
+    recording.frames.push([...state.lastVector]);
     recording.lastAt = now;
   }
 }
@@ -655,17 +662,42 @@ function finishRecording(save) {
   if (!recording) return;
   state.recording = null;
   els.captureProgress.hidden = true;
-  if (save && recording.samples.length) {
-    commitSamples([...state.samples, ...recording.samples], `${recording.label}: 샘플 ${recording.samples.length}개를 저장했습니다.`);
+  if (save && recording.frames.length >= 6) {
+    commitSamples([...state.samples, { label: recording.label, sequence: recording.frames }], `${recording.label}: 동작 샘플 1개를 저장했습니다.`);
   } else notify(save ? "손이 감지되지 않아 저장된 샘플이 없습니다." : "샘플 수집을 취소했습니다.");
   updateControls();
 }
 
+function updateMotionRecognition(vector, now) {
+  const motion = state.motion;
+  const delta = motion.lastVector ? motionMagnitude(motion.lastVector, vector) : 0;
+  motion.lastVector = [...vector];
+  if (now - motion.lastAt < 75) return null;
+  motion.lastAt = now;
+  if (delta > 0.035) {
+    if (!motion.active) { motion.active = true; motion.frames = []; state.stabilizer.reset(); state.sentenceArmed = true; }
+    motion.frames.push([...vector]);
+    motion.quietSince = 0;
+    return null;
+  }
+  if (!motion.active) return null;
+  motion.frames.push([...vector]);
+  if (!motion.quietSince) motion.quietSince = now;
+  if (now - motion.quietSince < 220) return null;
+  const frames = motion.frames;
+  motion.active = false;
+  motion.frames = [];
+  return frames.length >= 6 ? classifySequence(frames, state.samples) : null;
+}
+
 function predict(vector, now) {
-  const result = state.stabilizer.update(classify(vector, state.samples), now);
+  applyRecognition(state.stabilizer.update(classify(vector, state.samples), now), "정지");
+}
+
+function applyRecognition(result, mode) {
   if (result.status === "untrained") {
     state.sentenceArmed = true;
-    showPrediction("학습 필요", "어깨 기준으로 수어 이름별 샘플을 3개 이상 새로 저장해 주세요.", 0);
+    showPrediction("학습 필요", `${mode} 수어 이름별 샘플을 3개 이상 저장해 주세요.`, 0);
   } else if (result.status === "unknown") {
     state.sentenceArmed = true;
     showPrediction("판단 보류", "저장된 손모양과 다르거나 후보가 비슷합니다.", result.similarity);
@@ -673,7 +705,7 @@ function predict(vector, now) {
     state.sentenceArmed = true;
     showPrediction("확인 중", "손모양을 비교하고 있습니다.", result.similarity);
   } else {
-    showPrediction(result.label, "저장된 손모양과 유사합니다.", result.similarity);
+    showPrediction(result.label, `${mode} 수어와 유사합니다.`, result.similarity);
     if (state.sentenceArmed || state.sentenceWords.at(-1) !== result.label) {
       state.sentenceWords.push(result.label);
       state.sentenceArmed = false;
@@ -734,7 +766,7 @@ function updateControls() {
   els.startBtn.textContent = state.starting ? "준비 중" : state.running ? "카메라 중지" : "카메라 시작";
   els.sampleBtn.disabled = !canCapture || busy;
   els.recordBtn.disabled = !state.recording && (!canCapture || busy);
-  els.recordBtn.textContent = state.recording ? "수집 취소" : "2초 수집";
+  els.recordBtn.textContent = state.recording ? "수집 취소" : "2초 동작 수집";
   els.labelInput.disabled = busy;
   els.clearBtn.disabled = busy || !state.samples.length || state.storageBlocked;
   els.exportBtn.disabled = !state.samples.length;
@@ -748,9 +780,11 @@ function updateSampleUi() {
 
   const counts = new Map();
   const shoulderCounts = new Map();
+  const motionCounts = new Map();
   for (const sample of state.samples) {
     counts.set(sample.label, (counts.get(sample.label) || 0) + 1);
-    if (sample.vector.length === 130) shoulderCounts.set(sample.label, (shoulderCounts.get(sample.label) || 0) + 1);
+    if (sample.vector?.length === 130) shoulderCounts.set(sample.label, (shoulderCounts.get(sample.label) || 0) + 1);
+    if (sample.sequence) motionCounts.set(sample.label, (motionCounts.get(sample.label) || 0) + 1);
   }
 
   els.labels.replaceChildren(
@@ -761,8 +795,9 @@ function updateSampleUi() {
       name.textContent = label;
       const amount = document.createElement("span");
       const shoulderCount = shoulderCounts.get(label) || 0;
+      const motionCount = motionCounts.get(label) || 0;
       amount.className = shoulderCount >= 3 ? "sample-ready" : "sample-pending";
-      amount.textContent = `${count}개 · ${shoulderCount >= 3 ? "어깨 기준 " + shoulderCount + "개" : "어깨 기준 재학습 필요"}`;
+      amount.textContent = `${count}개 · 정지 ${shoulderCount}개 · 동작 ${motionCount}개`;
       const button = document.createElement("button");
       button.className = "icon-button";
       button.textContent = "×";
@@ -834,7 +869,7 @@ function notify(message, error = false) {
 }
 
 function exportSamples() {
-  const blob = new Blob([JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), samples: state.samples }, null, 2)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), samples: state.samples }, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
