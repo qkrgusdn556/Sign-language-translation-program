@@ -171,9 +171,12 @@ export function faceLandmarksReference(faces, width, height) {
   };
 }
 
-export function selectFaceReference(detections, pose, width, height, landmarkFaces = []) {
-  if (detections.length > 1) return null;
-  const detected = faceLandmarksReference(landmarkFaces, width, height) || faceReference(detections, width, height);
+export function selectFaceReference(detections, pose, width, height, landmarkFaces = null) {
+  const faceCount = Array.isArray(landmarkFaces) ? landmarkFaces.length : detections.length;
+  if (faceCount > 1) return null;
+  const detected = Array.isArray(landmarkFaces)
+    ? faceLandmarksReference(landmarkFaces, width, height)
+    : faceReference(detections, width, height);
   const fromPose = poseFaceReference(pose, width, height);
   if (!detected || !fromPose) return detected || fromPose;
 

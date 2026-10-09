@@ -9,7 +9,7 @@ const yoloSource = await readFile(new URL("../yolo.js", import.meta.url), "utf8"
 const vector = Array.from({ length: 126 }, (_, i) => i < 63 ? i / 63 : 0);
 const sample = () => ({ label: "hello", vector: [...vector] });
 
-async function setup({ saved = "[]", denied = false, quota = false, faces = [], hands = [], poses = [] } = {}) {
+async function setup({ saved = "[]", denied = false, quota = false, faceLandmarks = [], hands = [], poses = [] } = {}) {
   const elements = new Map();
   const ctx = { clearRect() {}, strokeRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {} };
   function element(id = "") {
@@ -47,15 +47,12 @@ async function setup({ saved = "[]", denied = false, quota = false, faces = [], 
   const yolo = new vm.SourceTextModule(yoloSource, { context });
   await yolo.link(() => {});
   await yolo.evaluate();
-  const mockVision = new vm.SyntheticModule(["HandLandmarker", "FaceDetector", "FaceLandmarker", "PoseLandmarker", "FilesetResolver"], function () {
+  const mockVision = new vm.SyntheticModule(["HandLandmarker", "FaceLandmarker", "PoseLandmarker", "FilesetResolver"], function () {
     this.setExport("HandLandmarker", { HAND_CONNECTIONS: [], createFromOptions: async () => ({
       detectForVideo() { detects++; return { landmarks: hands }; }, close() {},
     }) });
-    this.setExport("FaceDetector", { createFromOptions: async () => ({
-      detectForVideo() { return { detections: faces }; }, close() {},
-    }) });
     this.setExport("FaceLandmarker", { createFromOptions: async () => ({
-      detectForVideo() { return { faceLandmarks: [] }; }, close() {},
+      detectForVideo() { return { faceLandmarks }; }, close() {},
     }) });
     this.setExport("PoseLandmarker", { createFromOptions: async () => ({
       detectForVideo() { return { landmarks: poses }; }, close() {},
@@ -73,7 +70,7 @@ async function setup({ saved = "[]", denied = false, quota = false, faces = [], 
   await app.link((specifier) => specifier.startsWith("./recognition.js") ? recognition : yolo);
   await app.evaluate();
   return { api: app.namespace, elements, storage, metrics: () => ({ calls, stopped, detects }),
-    setDenied: (value) => { denied = value; }, setFaces: (value) => { faces = value; }, setPoses: (value) => { poses = value; }, setClock: (value) => { clock = value; } };
+    setDenied: (value) => { denied = value; }, setFaceLandmarks: (value) => { faceLandmarks = value; }, setPoses: (value) => { poses = value; }, setClock: (value) => { clock = value; } };
 }
 
 test("camera denial re-enables start and a retry can start then release the camera", async () => {
@@ -171,12 +168,12 @@ test("face is required for capture, and sustained face loss invalidates samples"
   h.api.loop(100);
   assert.equal(h.api.state.lastVector, null);
   assert.equal(h.elements.get("#sampleBtn").disabled, true);
-  h.setFaces([{boundingBox:{originX:380,originY:80,width:180,height:210}}]);
+  h.setFaceLandmarks([Array.from({length:468}, (_, i) => ({x:0.4+(i%12)*0.018, y:0.2+(Math.floor(i/12)%12)*0.02}))]);
   h.elements.get("#camera").currentTime++;
   h.api.loop(200);
   assert.equal(h.api.state.lastVector.length, 130);
   assert.equal(h.elements.get("#sampleBtn").disabled, false);
-  h.setFaces([]);
+  h.setFaceLandmarks([]);
   h.elements.get("#camera").currentTime++;
   h.api.loop(300);
   assert.equal(h.api.state.lastVector.length, 130);

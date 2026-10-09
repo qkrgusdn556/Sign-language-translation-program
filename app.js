@@ -44,12 +44,10 @@ const els = {
 
 const state = {
   landmarker: null,
-  faceDetector: null,
   faceLandmarker: null,
   poseLandmarker: null,
   face: null,
   faceTracker: createFaceTracker(),
-  detectedFaces: [],
   detectedFaceLandmarks: [],
   pose: null,
   poseArms: null,
@@ -133,8 +131,8 @@ async function startCamera() {
   els.trackingState.textContent = "모델 로딩";
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("카메라를 사용할 수 없는 브라우저입니다.");
-    if (!state.landmarker || !state.faceDetector || !state.faceLandmarker || !state.poseLandmarker) {
-      const { HandLandmarker, FaceDetector, FaceLandmarker, PoseLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
+    if (!state.landmarker || !state.faceLandmarker || !state.poseLandmarker) {
+      const { HandLandmarker, FaceLandmarker, PoseLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
       HAND_CONNECTIONS = HandLandmarker.HAND_CONNECTIONS;
       const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm");
       const options = {
@@ -153,16 +151,6 @@ async function startCamera() {
           state.landmarker = await HandLandmarker.createFromOptions(vision, options);
         }
       }
-      if (!state.faceDetector) {
-        els.trackingState.textContent = "얼굴 모델 로딩";
-        state.faceDetector = await FaceDetector.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
-            delegate: "CPU",
-          },
-          runningMode: "VIDEO", minDetectionConfidence: 0.65,
-        });
-      }
       if (!state.faceLandmarker) {
         els.trackingState.textContent = "얼굴 랜드마크 모델 로딩";
         state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
@@ -170,7 +158,7 @@ async function startCamera() {
             modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
             delegate: "CPU",
           },
-          runningMode: "VIDEO", numFaces: 1,
+          runningMode: "VIDEO", numFaces: 2,
           minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
           outputFaceBlendshapes: false, outputFacialTransformationMatrixes: false,
         });
@@ -266,7 +254,6 @@ function stopCamera(message) {
   state.lastVector = null;
   state.face = null;
   state.faceTracker.reset();
-  state.detectedFaces = [];
   state.detectedFaceLandmarks = [];
   state.lastPoseAt = 0;
   state.lastFaceAt = 0;
@@ -301,10 +288,9 @@ function loop(now) {
       }
       if (now - state.lastFaceAt >= 120) {
         state.lastFaceAt = now;
-        state.detectedFaces = state.faceDetector.detectForVideo(els.video, now).detections;
         state.detectedFaceLandmarks = state.faceLandmarker.detectForVideo(els.video, now).faceLandmarks;
       }
-      const faces = state.detectedFaces;
+      const faces = state.detectedFaceLandmarks;
       const faceCandidate = selectFaceReference(faces, state.pose, els.video.videoWidth, els.video.videoHeight, state.detectedFaceLandmarks);
       if (faces.length > 1) {
         state.faceTracker.reset();
@@ -314,7 +300,7 @@ function loop(now) {
       }
       state.poseArms = poseArmTargets(state.pose, state.face);
       els.faceState.textContent = faces.length > 1 ? "한 사람만 보여 주세요"
-        : state.face?.source === "face" ? "얼굴 기준 연결됨"
+        : state.face?.source === "landmarks" ? "얼굴 랜드마크 연결됨"
         : state.face?.source === "pose" ? "포즈 얼굴 기준 연결됨" : "얼굴 대기";
       els.trackingState.textContent = state.poseArms ? "얼굴·팔 추적" : state.face ? "팔 대기" : "얼굴 대기";
       drawLandmarks(result);
@@ -340,7 +326,6 @@ function loop(now) {
       state.lastVector = null;
       state.face = null;
       state.faceTracker.reset();
-      state.detectedFaces = [];
       state.detectedFaceLandmarks = [];
       state.pose = null;
       state.poseArms = null;
@@ -358,8 +343,6 @@ function loop(now) {
     stopCamera();
     state.landmarker?.close();
     state.landmarker = null;
-    state.faceDetector?.close();
-    state.faceDetector = null;
     state.faceLandmarker?.close();
     state.faceLandmarker = null;
     state.poseLandmarker?.close();

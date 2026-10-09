@@ -139,6 +139,11 @@ test("face landmarks provide the primary face box when one face is tracked", () 
   assert.equal(faceLandmarksReference([], 1000, 600), null);
 });
 
+test("an empty landmark result does not use a weaker detector box", () => {
+  const falsePositive = { boundingBox: { originX: 20, originY: 30, width: 180, height: 180 } };
+  assert.equal(selectFaceReference([falsePositive], null, 1000, 600, []), null);
+});
+
 test("pose arm targets retain shoulder, elbow and wrist order in mirror space", () => {
   const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.99, presence: 0.99 }));
   pose[11] = { x: 0.72, y: 0.45, visibility: 0.99, presence: 0.99 };
