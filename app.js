@@ -1,4 +1,4 @@
-import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, selectFaceReference, createFaceTracker, avatarWrist, poseArmTargets } from "./recognition.js?v=face-pose-verify-1";
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, selectFaceReference, createFaceTracker, avatarWrist, poseArmTargets } from "./recognition.js?v=face-landmarks-1";
 import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js?v=pose-arm-1";
 
 let THREE, createHuman, segment, connect, poseArms;
@@ -45,10 +45,12 @@ const els = {
 const state = {
   landmarker: null,
   faceDetector: null,
+  faceLandmarker: null,
   poseLandmarker: null,
   face: null,
   faceTracker: createFaceTracker(),
   detectedFaces: [],
+  detectedFaceLandmarks: [],
   pose: null,
   poseArms: null,
   avatar: null,
@@ -131,8 +133,8 @@ async function startCamera() {
   els.trackingState.textContent = "모델 로딩";
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("카메라를 사용할 수 없는 브라우저입니다.");
-    if (!state.landmarker || !state.faceDetector || !state.poseLandmarker) {
-      const { HandLandmarker, FaceDetector, PoseLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
+    if (!state.landmarker || !state.faceDetector || !state.faceLandmarker || !state.poseLandmarker) {
+      const { HandLandmarker, FaceDetector, FaceLandmarker, PoseLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
       HAND_CONNECTIONS = HandLandmarker.HAND_CONNECTIONS;
       const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm");
       const options = {
@@ -159,6 +161,18 @@ async function startCamera() {
             delegate: "CPU",
           },
           runningMode: "VIDEO", minDetectionConfidence: 0.65,
+        });
+      }
+      if (!state.faceLandmarker) {
+        els.trackingState.textContent = "얼굴 랜드마크 모델 로딩";
+        state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+            delegate: "CPU",
+          },
+          runningMode: "VIDEO", numFaces: 1,
+          minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+          outputFaceBlendshapes: false, outputFacialTransformationMatrixes: false,
         });
       }
       if (!state.poseLandmarker) {
@@ -253,6 +267,7 @@ function stopCamera(message) {
   state.face = null;
   state.faceTracker.reset();
   state.detectedFaces = [];
+  state.detectedFaceLandmarks = [];
   state.lastPoseAt = 0;
   state.lastFaceAt = 0;
   state.pose = null;
@@ -287,9 +302,10 @@ function loop(now) {
       if (now - state.lastFaceAt >= 120) {
         state.lastFaceAt = now;
         state.detectedFaces = state.faceDetector.detectForVideo(els.video, now).detections;
+        state.detectedFaceLandmarks = state.faceLandmarker.detectForVideo(els.video, now).faceLandmarks;
       }
       const faces = state.detectedFaces;
-      const faceCandidate = selectFaceReference(faces, state.pose, els.video.videoWidth, els.video.videoHeight);
+      const faceCandidate = selectFaceReference(faces, state.pose, els.video.videoWidth, els.video.videoHeight, state.detectedFaceLandmarks);
       if (faces.length > 1) {
         state.faceTracker.reset();
         state.face = null;
@@ -325,6 +341,7 @@ function loop(now) {
       state.face = null;
       state.faceTracker.reset();
       state.detectedFaces = [];
+      state.detectedFaceLandmarks = [];
       state.pose = null;
       state.poseArms = null;
       els.faceState.textContent = "얼굴 대기";
@@ -343,6 +360,8 @@ function loop(now) {
     state.landmarker = null;
     state.faceDetector?.close();
     state.faceDetector = null;
+    state.faceLandmarker?.close();
+    state.faceLandmarker = null;
     state.poseLandmarker?.close();
     state.poseLandmarker = null;
     notify("손 추적이 중단되었습니다. 카메라를 다시 시작해 주세요.", true);

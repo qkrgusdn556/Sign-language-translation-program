@@ -148,9 +148,32 @@ export function poseFaceReference(pose, width, height) {
   };
 }
 
-export function selectFaceReference(detections, pose, width, height) {
+export function faceLandmarksReference(faces, width, height) {
+  if (!Array.isArray(faces) || faces.length !== 1 || !width || !height) return null;
+  const landmarks = faces[0];
+  if (!Array.isArray(landmarks) || landmarks.length < 100) return null;
+  const xs = landmarks.map((point) => point.x).filter(Number.isFinite);
+  const ys = landmarks.map((point) => point.y).filter(Number.isFinite);
+  if (xs.length !== landmarks.length || ys.length !== landmarks.length) return null;
+  const left = Math.max(0, Math.min(...xs));
+  const right = Math.min(1, Math.max(...xs));
+  const top = Math.max(0, Math.min(...ys));
+  const bottom = Math.min(1, Math.max(...ys));
+  const scale = right - left;
+  if (scale < 0.06 || bottom - top < 0.06) return null;
+  return {
+    x: (left + right) / 2,
+    y: (top + bottom) / 2,
+    scale,
+    aspect: height / width,
+    box: { originX: left * width, originY: top * height, width: scale * width, height: (bottom - top) * height },
+    source: "landmarks",
+  };
+}
+
+export function selectFaceReference(detections, pose, width, height, landmarkFaces = []) {
   if (detections.length > 1) return null;
-  const detected = faceReference(detections, width, height);
+  const detected = faceLandmarksReference(landmarkFaces, width, height) || faceReference(detections, width, height);
   const fromPose = poseFaceReference(pose, width, height);
   if (!detected || !fromPose) return detected || fromPose;
 

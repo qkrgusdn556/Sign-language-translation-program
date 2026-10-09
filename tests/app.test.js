@@ -47,12 +47,15 @@ async function setup({ saved = "[]", denied = false, quota = false, faces = [], 
   const yolo = new vm.SourceTextModule(yoloSource, { context });
   await yolo.link(() => {});
   await yolo.evaluate();
-  const mockVision = new vm.SyntheticModule(["HandLandmarker", "FaceDetector", "PoseLandmarker", "FilesetResolver"], function () {
+  const mockVision = new vm.SyntheticModule(["HandLandmarker", "FaceDetector", "FaceLandmarker", "PoseLandmarker", "FilesetResolver"], function () {
     this.setExport("HandLandmarker", { HAND_CONNECTIONS: [], createFromOptions: async () => ({
       detectForVideo() { detects++; return { landmarks: hands }; }, close() {},
     }) });
     this.setExport("FaceDetector", { createFromOptions: async () => ({
       detectForVideo() { return { detections: faces }; }, close() {},
+    }) });
+    this.setExport("FaceLandmarker", { createFromOptions: async () => ({
+      detectForVideo() { return { faceLandmarks: [] }; }, close() {},
     }) });
     this.setExport("PoseLandmarker", { createFromOptions: async () => ({
       detectForVideo() { return { landmarks: poses }; }, close() {},
