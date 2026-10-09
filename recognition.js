@@ -128,7 +128,47 @@ export function faceReference(detections, width, height) {
   const box = detections[0].boundingBox;
   if (!box || ![box.originX, box.originY, box.width, box.height].every(Number.isFinite) || box.width < 20 || box.height < 20) return null;
   return { x: (box.originX + box.width / 2) / width, y: (box.originY + box.height / 2) / height,
-    scale: box.width / width, aspect: height / width, box };
+    scale: box.width / width, aspect: height / width, box, source: "face" };
+}
+
+export function poseFaceReference(pose, width, height) {
+  if (!Array.isArray(pose) || pose.length < 13 || !width || !height) return null;
+  const [nose, leftShoulder, rightShoulder] = [pose[0], pose[11], pose[12]];
+  const visible = (point) => point && (point.visibility ?? 1) >= 0.55 && (point.presence ?? 1) >= 0.55;
+  if (![nose, leftShoulder, rightShoulder].every(visible)) return null;
+  const shoulderWidth = Math.hypot(leftShoulder.x - rightShoulder.x, leftShoulder.y - rightShoulder.y);
+  if (shoulderWidth < 0.06) return null;
+  return {
+    x: nose.x,
+    y: nose.y + shoulderWidth * 0.09,
+    scale: shoulderWidth * 0.42,
+    aspect: height / width,
+    box: null,
+    source: "pose",
+  };
+}
+
+export function createFaceTracker({ maxLostMs = 420, smoothing = 0.35 } = {}) {
+  let face = null;
+  let lastSeen = -Infinity;
+  return {
+    reset() { face = null; lastSeen = -Infinity; },
+    update(candidate, now) {
+      if (candidate) {
+        if (face) {
+          face = {
+            ...candidate,
+            x: face.x + (candidate.x - face.x) * smoothing,
+            y: face.y + (candidate.y - face.y) * smoothing,
+            scale: face.scale + (candidate.scale - face.scale) * smoothing,
+          };
+        } else face = { ...candidate };
+        lastSeen = now;
+        return face;
+      }
+      return now - lastSeen <= maxLostMs ? { ...face, stale: true } : null;
+    },
+  };
 }
 
 export function faceRelativePoint(point, face) {
@@ -145,7 +185,7 @@ export function poseArmTargets(pose, face) {
   if (!Array.isArray(pose) || pose.length < 17 || !face) return null;
   const chains = [[11, 13, 15], [12, 14, 16]].map((indices) => {
     const points = indices.map((index) => pose[index]);
-    if (points.some((point) => !point || point.visibility < 0.5 || point.presence < 0.5)) return null;
+    if (points.some((point) => !point || (point.visibility ?? 1) < 0.5 || (point.presence ?? 1) < 0.5)) return null;
     const toAvatar = (point) => {
       const target = avatarWrist(point, face);
       return { ...target, source: point };

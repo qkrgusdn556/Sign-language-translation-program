@@ -161,7 +161,7 @@ test("quota failures and invalid existing data cannot silently overwrite saved s
   assert.equal(corrupt.storage.get("sign-translator-samples"), "{broken");
 });
 
-test("face is required for capture, and face loss invalidates samples immediately", async () => {
+test("face is required for capture, and sustained face loss invalidates samples", async () => {
   const hand = Array.from({length:21}, (_,i)=>({x:0.7+i*0.002,y:0.5-i*0.005,z:0}));
   const h = await setup({ hands: [hand] });
   await h.api.startCamera();
@@ -176,6 +176,12 @@ test("face is required for capture, and face loss invalidates samples immediatel
   h.setFaces([]);
   h.elements.get("#camera").currentTime++;
   h.api.loop(300);
+  assert.equal(h.api.state.lastVector.length, 130);
+  assert.equal(h.elements.get("#sampleBtn").disabled, false);
+  h.elements.get("#camera").currentTime++;
+  h.api.loop(700);
+  h.elements.get("#camera").currentTime++;
+  h.api.loop(800);
   assert.equal(h.api.state.lastVector, null);
   assert.equal(h.elements.get("#sampleBtn").disabled, true);
 });

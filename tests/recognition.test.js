@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateSamples, landmarksToVector, distance, classify, createStabilizer, assignHandSlots, faceReference, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
+import { validateSamples, landmarksToVector, distance, classify, createStabilizer, assignHandSlots, faceReference, poseFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
 
 const hand = (x = 0.3) => Array.from({ length: 21 }, (_, i) => ({ x: x + i * 0.003, y: 0.6 - i * 0.008, z: i * -0.002 }));
 const vector = landmarksToVector([hand()]);
@@ -98,6 +98,23 @@ test("missing, multiple or degenerate faces do not establish a reference", () =>
   assert.equal(faceReference([detection,detection],1000,600),null);
   assert.equal(faceReference([{boundingBox:{width:0,height:0}}],1000,600),null);
   assert.equal(faceReference([detection],1000,600).x,0.5);
+});
+
+test("pose face fallback smooths brief detector loss without keeping it indefinitely", () => {
+  const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.99, presence: 0.99 }));
+  pose[0] = { x: 0.5, y: 0.2, visibility: 0.99, presence: 0.99 };
+  pose[11] = { x: 0.7, y: 0.5, visibility: 0.99, presence: 0.99 };
+  pose[12] = { x: 0.3, y: 0.5, visibility: 0.99, presence: 0.99 };
+  const fallback = poseFaceReference(pose, 1000, 600);
+  assert.equal(fallback.source, "pose");
+  assert.equal(fallback.box, null);
+
+  const tracker = createFaceTracker({ maxLostMs: 420, smoothing: 0.5 });
+  tracker.update({ x: 0.5, y: 0.3, scale: 0.2, aspect: 0.6, source: "face" }, 0);
+  const smoothed = tracker.update({ x: 0.7, y: 0.5, scale: 0.4, aspect: 0.6, source: "face" }, 10);
+  assert.equal(smoothed.x, 0.6);
+  assert.equal(tracker.update(null, 300).stale, true);
+  assert.equal(tracker.update(null, 500), null);
 });
 
 test("pose arm targets retain shoulder, elbow and wrist order in mirror space", () => {

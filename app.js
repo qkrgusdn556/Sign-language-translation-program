@@ -1,4 +1,4 @@
-import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, faceReference, avatarWrist, poseArmTargets } from "./recognition.js?v=pose-arm-1";
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, faceReference, poseFaceReference, createFaceTracker, avatarWrist, poseArmTargets } from "./recognition.js?v=face-stable-1";
 import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js?v=pose-arm-1";
 
 let THREE, createHuman, segment, connect, poseArms;
@@ -47,6 +47,8 @@ const state = {
   faceDetector: null,
   poseLandmarker: null,
   face: null,
+  faceTracker: createFaceTracker(),
+  detectedFaces: [],
   pose: null,
   poseArms: null,
   avatar: null,
@@ -58,6 +60,7 @@ const state = {
   lastVideoTime: -1,
   lastFrameAt: 0,
   lastPoseAt: 0,
+  lastFaceAt: 0,
   lastVector: null,
   slots: [null, null],
   samples: [],
@@ -155,7 +158,7 @@ async function startCamera() {
             modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
             delegate: "CPU",
           },
-          runningMode: "VIDEO", minDetectionConfidence: 0.6,
+          runningMode: "VIDEO", minDetectionConfidence: 0.45,
         });
       }
       if (!state.poseLandmarker) {
@@ -246,6 +249,8 @@ function stopCamera(message) {
   els.video.srcObject = null;
   state.lastVector = null;
   state.face = null;
+  state.faceTracker.reset();
+  state.detectedFaces = [];
   state.pose = null;
   state.poseArms = null;
   state.stillness.reset();
@@ -271,14 +276,28 @@ function loop(now) {
       state.lastFrameAt = now;
       resizeCanvas();
       const result = state.landmarker.detectForVideo(els.video, now);
-      const faces = state.faceDetector.detectForVideo(els.video, now).detections;
-      state.face = faceReference(faces, els.video.videoWidth, els.video.videoHeight);
       if (now - state.lastPoseAt >= 90) {
         state.lastPoseAt = now;
         state.pose = state.poseLandmarker.detectForVideo(els.video, now).landmarks[0] || null;
       }
+      if (now - state.lastFaceAt >= 120) {
+        state.lastFaceAt = now;
+        state.detectedFaces = state.faceDetector.detectForVideo(els.video, now).detections;
+      }
+      const faces = state.detectedFaces;
+      const faceCandidate = faces.length === 1
+        ? faceReference(faces, els.video.videoWidth, els.video.videoHeight)
+        : faces.length === 0 ? poseFaceReference(state.pose, els.video.videoWidth, els.video.videoHeight) : null;
+      if (faces.length > 1) {
+        state.faceTracker.reset();
+        state.face = null;
+      } else {
+        state.face = state.faceTracker.update(faceCandidate, now);
+      }
       state.poseArms = poseArmTargets(state.pose, state.face);
-      els.faceState.textContent = state.face ? "얼굴 기준 연결됨" : faces.length > 1 ? "한 사람만 보여 주세요" : "얼굴 대기";
+      els.faceState.textContent = faces.length > 1 ? "한 사람만 보여 주세요"
+        : state.face?.source === "face" ? "얼굴 기준 연결됨"
+        : state.face?.source === "pose" ? "포즈 얼굴 기준 연결됨" : "얼굴 대기";
       els.trackingState.textContent = state.poseArms ? "얼굴·팔 추적" : state.face ? "팔 대기" : "얼굴 대기";
       drawLandmarks(result);
       state.slots = assignHandSlots(result, state.slots);
@@ -302,6 +321,8 @@ function loop(now) {
     if (now - state.lastFrameAt > 500 && (state.lastVector || state.face)) {
       state.lastVector = null;
       state.face = null;
+      state.faceTracker.reset();
+      state.detectedFaces = [];
       state.pose = null;
       state.poseArms = null;
       els.faceState.textContent = "얼굴 대기";
@@ -376,14 +397,16 @@ function drawLandmarks(result) {
   ctx.lineWidth = 2 * Math.min(devicePixelRatio, 2);
   ctx.strokeStyle = "#65dfb3";
   ctx.fillStyle = "#f5ce91";
-  if (state.face) {
+  if (state.face?.box) {
     const box = state.face.box;
     ctx.strokeStyle = "#83c9f4";
     ctx.strokeRect(x + box.originX * scale, y + box.originY * scale, box.width * scale, box.height * scale);
+    ctx.strokeStyle = "#65dfb3";
+  }
+  if (state.face) {
     ctx.beginPath();
     ctx.arc(x + state.face.x * width, y + state.face.y * height, 4 * Math.min(devicePixelRatio, 2), 0, Math.PI * 2);
     ctx.stroke();
-    ctx.strokeStyle = "#65dfb3";
   }
   if (state.poseArms) {
     ctx.strokeStyle = "#bda9ff";
