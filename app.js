@@ -1,4 +1,4 @@
-import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=shoulder-tracking-1";
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=shoulder-hand-fusion-1";
 import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js?v=pose-arm-1";
 
 let THREE, createHuman, segment, connect, poseArms;
@@ -267,11 +267,11 @@ function loop(now) {
         state.pose = state.poseLandmarker.detectForVideo(els.video, now).landmarks[0] || null;
         state.shoulders = shoulderReference(state.pose, els.video.videoWidth, els.video.videoHeight);
       }
-      state.poseArms = poseArmTargets(state.pose, state.shoulders);
+      state.slots = assignHandSlots(result, state.slots);
+      state.poseArms = poseArmTargets(state.pose, state.shoulders, state.slots);
       els.faceState.textContent = state.shoulders ? "어깨 기준 연결됨" : "어깨 대기";
       els.trackingState.textContent = state.poseArms ? "어깨·팔 추적" : state.shoulders ? "팔 대기" : "어깨 대기";
       drawLandmarks(result);
-      state.slots = assignHandSlots(result, state.slots);
       updateAvatar(state.shoulders ? state.slots : [null, null], result);
       state.lastVector = state.shoulders ? landmarksToVector(result.landmarks, state.shoulders) : null;
       if (state.lastVector) {

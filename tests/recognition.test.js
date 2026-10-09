@@ -160,6 +160,21 @@ test("pose arm targets retain shoulder, elbow and wrist order in mirror space", 
   assert.equal(poseArmTargets(pose, face), null);
 });
 
+test("pose arms attach their wrist endpoint to the matching hand landmark", () => {
+  const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.99, presence: 0.99 }));
+  pose[11] = { x: 0.72, y: 0.45, visibility: 0.99, presence: 0.99 };
+  pose[13] = { x: 0.75, y: 0.6, visibility: 0.99, presence: 0.99 };
+  pose[15] = { x: 0.76, y: 0.72, visibility: 0.99, presence: 0.99 };
+  pose[12] = { x: 0.28, y: 0.45, visibility: 0.99, presence: 0.99 };
+  pose[14] = { x: 0.25, y: 0.6, visibility: 0.99, presence: 0.99 };
+  pose[16] = { x: 0.24, y: 0.72, visibility: 0.99, presence: 0.99 };
+  const leftHand = hand(0.77), rightHand = hand(0.23);
+  const arms = poseArmTargets(pose, face, [leftHand, rightHand]);
+  assert.equal(arms[0].wrist.source, leftHand[0]);
+  assert.equal(arms[1].wrist.source, rightHand[0]);
+  assert.ok(arms.every((arm) => arm.wrist.handAttached));
+});
+
 test("shoulder reference works without a face and scales with shoulder width", () => {
   const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.99, presence: 0.99 }));
   pose[11] = { x: 0.7, y: 0.45, visibility: 0.99, presence: 0.99 };

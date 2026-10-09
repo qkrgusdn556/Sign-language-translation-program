@@ -235,18 +235,23 @@ export function avatarWrist(point, face) {
     y: Math.max(-1.25, Math.min(1.45, 0.82 + y * 0.7)), z: 0.65 };
 }
 
-export function poseArmTargets(pose, face) {
-  if (!Array.isArray(pose) || pose.length < 17 || !face) return null;
+export function poseArmTargets(pose, reference, hands = []) {
+  if (!Array.isArray(pose) || pose.length < 17 || !reference) return null;
   const chains = [[11, 13, 15], [12, 14, 16]].map((indices) => {
     const points = indices.map((index) => pose[index]);
     if (points.some((point) => !point || (point.visibility ?? 1) < 0.5 || (point.presence ?? 1) < 0.5)) return null;
     const toAvatar = (point) => {
-      const target = avatarWrist(point, face);
+      const target = avatarWrist(point, reference);
       return { ...target, source: point };
     };
     return { shoulder: toAvatar(points[0]), elbow: toAvatar(points[1]), wrist: toAvatar(points[2]) };
   }).filter(Boolean);
   if (chains.length !== 2) return null;
   // Avatar is displayed as a mirror, so the smaller avatar x is screen-left.
-  return chains.sort((a, b) => a.shoulder.x - b.shoulder.x);
+  return chains.sort((a, b) => a.shoulder.x - b.shoulder.x).map((chain, index) => {
+    const handWrist = hands[index]?.[0];
+    if (!handWrist) return chain;
+    const target = avatarWrist(handWrist, reference);
+    return { ...chain, wrist: { ...target, source: handWrist, handAttached: true } };
+  });
 }
