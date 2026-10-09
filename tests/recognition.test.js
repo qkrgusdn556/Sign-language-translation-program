@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateSamples, landmarksToVector, distance, classify, classifySequence, motionMagnitude, dtwDistance, createStabilizer, assignHandSlots, faceReference, faceLandmarksReference, poseFaceReference, shoulderReference, selectFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
+import { validateSamples, landmarksToVector, mouthFeatures, distance, classify, classifySequence, motionMagnitude, dtwDistance, createStabilizer, assignHandSlots, faceReference, faceLandmarksReference, poseFaceReference, shoulderReference, selectFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
 
 const hand = (x = 0.3) => Array.from({ length: 21 }, (_, i) => ({ x: x + i * 0.003, y: 0.6 - i * 0.008, z: i * -0.002 }));
 const vector = landmarksToVector([hand()]);
@@ -98,6 +98,22 @@ test("same shape at the face and chest produces different recognition results", 
   assert.equal(classify(nearVector,[...samples("face",nearVector),...samples("chest",chestVector)]).label,"face");
   assert.equal(classify(nearVector,samples("legacy")).status,"untrained");
   assert.equal(validateSamples({version:2,samples:samples("face",nearVector)}).length,3);
+});
+
+test("mouth blendshapes extend shoulder-relative vectors without changing wrist motion", () => {
+  const mouth = mouthFeatures({ categories: [
+    { categoryName: "jawOpen", score: 0.75 },
+    { categoryName: "mouthPucker", score: 0.25 },
+    { categoryName: "mouthSmileLeft", score: 2 },
+  ] });
+  assert.deepEqual(mouth, [0.75, 0, 0, 0.25, 1, 0]);
+  const mouthVector = landmarksToVector([hand()], face, mouth);
+  assert.equal(mouthVector.length, 136);
+  assert.equal(validateSamples([{ label: "mouth", vector: mouthVector }]).length, 1);
+  const alteredMouth = [...mouthVector];
+  alteredMouth[130] += 0.5;
+  assert.ok(distance(mouthVector, alteredMouth) > 0);
+  assert.equal(motionMagnitude(mouthVector, alteredMouth), 0);
 });
 
 test("face and shape features swap together when detection order changes", () => {

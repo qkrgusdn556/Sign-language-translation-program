@@ -288,6 +288,7 @@ button:not(#startBtn) {
 
 .avatar-status { display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.85rem; }
 #faceState { margin: 0; color: #83c9f4; line-height: 1.45; }
+#mouthState { margin: 0; color: #f5ce91; line-height: 1.45; }
 
 .avatar-wrap {
   overflow: hidden;

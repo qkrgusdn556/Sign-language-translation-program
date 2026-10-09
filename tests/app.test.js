@@ -9,7 +9,7 @@ const yoloSource = await readFile(new URL("../yolo.js", import.meta.url), "utf8"
 const vector = Array.from({ length: 126 }, (_, i) => i < 63 ? i / 63 : 0);
 const sample = () => ({ label: "hello", vector: [...vector] });
 
-async function setup({ saved = "[]", denied = false, quota = false, faceLandmarks = [], hands = [], poses = [] } = {}) {
+async function setup({ saved = "[]", denied = false, quota = false, faceLandmarks = [], blendshapes = [{ categories: [] }], hands = [], poses = [] } = {}) {
   const elements = new Map();
   const ctx = { clearRect() {}, strokeRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {} };
   function element(id = "") {
@@ -52,7 +52,7 @@ async function setup({ saved = "[]", denied = false, quota = false, faceLandmark
       detectForVideo() { detects++; return { landmarks: hands }; }, close() {},
     }) });
     this.setExport("FaceLandmarker", { createFromOptions: async () => ({
-      detectForVideo() { return { faceLandmarks }; }, close() {},
+      detectForVideo() { return { faceLandmarks, faceBlendshapes: blendshapes }; }, close() {},
     }) });
     this.setExport("PoseLandmarker", { createFromOptions: async () => ({
       detectForVideo() { return { landmarks: poses }; }, close() {},
@@ -70,7 +70,7 @@ async function setup({ saved = "[]", denied = false, quota = false, faceLandmark
   await app.link((specifier) => specifier.startsWith("./recognition.js") ? recognition : yolo);
   await app.evaluate();
   return { api: app.namespace, elements, storage, metrics: () => ({ calls, stopped, detects }),
-    setDenied: (value) => { denied = value; }, setFaceLandmarks: (value) => { faceLandmarks = value; }, setPoses: (value) => { poses = value; }, setClock: (value) => { clock = value; } };
+    setDenied: (value) => { denied = value; }, setFaceLandmarks: (value) => { faceLandmarks = value; }, setBlendshapes: (value) => { blendshapes = value; }, setPoses: (value) => { poses = value; }, setClock: (value) => { clock = value; } };
 }
 
 test("camera denial re-enables start and a retry can start then release the camera", async () => {
@@ -165,9 +165,9 @@ test("quota failures and invalid existing data cannot silently overwrite saved s
   assert.equal(corrupt.storage.get("sign-translator-samples"), "{broken");
 });
 
-test("shoulders are required for capture, and shoulder loss invalidates samples", async () => {
+test("shoulders and mouth tracking are required for capture, and shoulder loss invalidates samples", async () => {
   const hand = Array.from({length:21}, (_,i)=>({x:0.7+i*0.002,y:0.5-i*0.005,z:0}));
-  const h = await setup({ hands: [hand] });
+  const h = await setup({ hands: [hand], blendshapes: [] });
   await h.api.startCamera();
   h.api.loop(100);
   assert.equal(h.api.state.lastVector, null);
@@ -178,11 +178,16 @@ test("shoulders are required for capture, and shoulder loss invalidates samples"
   h.setPoses([pose]);
   h.elements.get("#camera").currentTime++;
   h.api.loop(200);
-  assert.equal(h.api.state.lastVector.length, 130);
+  assert.equal(h.api.state.lastVector, null);
+  assert.equal(h.elements.get("#sampleBtn").disabled, true);
+  h.setBlendshapes([{ categories: [] }]);
+  h.elements.get("#camera").currentTime++;
+  h.api.loop(300);
+  assert.equal(h.api.state.lastVector.length, 136);
   assert.equal(h.elements.get("#sampleBtn").disabled, false);
   h.setPoses([]);
   h.elements.get("#camera").currentTime++;
-  h.api.loop(300);
+  h.api.loop(400);
   assert.equal(h.api.state.lastVector, null);
   assert.equal(h.elements.get("#sampleBtn").disabled, true);
 });

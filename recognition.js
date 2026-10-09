@@ -10,7 +10,7 @@ export function validateSamples(value) {
     if (typeof sample?.label !== "string" || !sample.label.trim() || sample.label.trim().length > 40) {
       throw new Error("유효하지 않은 샘플이 있습니다. 기존 데이터는 유지됩니다.");
     }
-    const validVector = (vector) => Array.isArray(vector) && [126, 130].includes(vector.length) &&
+    const validVector = (vector) => Array.isArray(vector) && [126, 130, 136].includes(vector.length) &&
       vector.every((n) => typeof n === "number" && Number.isFinite(n) && Math.abs(n) <= 100);
     if (validVector(sample.vector)) return { label: sample.label.trim(), vector: [...sample.vector] };
     if (Array.isArray(sample.sequence) && sample.sequence.length >= MIN_SEQUENCE_FRAMES && sample.sequence.length <= MAX_SEQUENCE_FRAMES && sample.sequence.every(validVector)) {
@@ -20,7 +20,7 @@ export function validateSamples(value) {
   });
 }
 
-export function landmarksToVector(hands, face = null) {
+export function landmarksToVector(hands, face = null, mouth = null) {
   if (!hands?.length) return null;
   const vector = hands.slice(0, 2).flatMap((hand) => {
     const wrist = hand[0];
@@ -35,6 +35,7 @@ export function landmarksToVector(hands, face = null) {
     const positions = hands.slice(0, 2).flatMap((hand) => faceRelativePoint(hand[0], face));
     while (positions.length < 4) positions.push(0);
     vector.push(...positions);
+    if (mouth) vector.push(...mouth);
   }
   return vector;
 }
@@ -55,13 +56,24 @@ export function distance(a, b) {
   const dimensions = 63 * Math.max(1, handCount(a));
   direct /= dimensions;
   swapped /= dimensions;
-  if (a.length === 130) {
+  if (a.length >= 130) {
     for (let i = 0; i < 4; i++) {
       direct += 0.2 * (a[126 + i] - b[126 + i]) ** 2;
       swapped += 0.2 * (a[126 + i] - b[126 + (i + 2) % 4]) ** 2;
     }
+    for (let i = 130; i < a.length; i++) {
+      direct += 0.15 * (a[i] - b[i]) ** 2;
+      swapped += 0.15 * (a[i] - b[i]) ** 2;
+    }
   }
   return Math.sqrt(Math.min(direct, swapped));
+}
+
+export function mouthFeatures(blendshapes) {
+  const categories = Array.isArray(blendshapes?.categories) ? blendshapes.categories : [];
+  const scores = new Map(categories.map((category) => [category.categoryName, category.score]));
+  const names = ["jawOpen", "mouthClose", "mouthFunnel", "mouthPucker", "mouthSmileLeft", "mouthSmileRight"];
+  return names.map((name) => Math.max(0, Math.min(1, Number(scores.get(name)) || 0)));
 }
 
 export function classify(vector, samples) {
@@ -93,7 +105,7 @@ export function classify(vector, samples) {
 
 export function motionMagnitude(previous, next) {
   if (!previous || !next || previous.length !== next.length || previous.length < 130) return 0;
-  return Math.hypot(...previous.slice(-4).map((value, index) => next[next.length - 4 + index] - value));
+  return Math.hypot(...previous.slice(126, 130).map((value, index) => next[126 + index] - value));
 }
 
 export function dtwDistance(sequenceA, sequenceB) {
