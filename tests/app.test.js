@@ -9,7 +9,7 @@ const yoloSource = await readFile(new URL("../yolo.js", import.meta.url), "utf8"
 const vector = Array.from({ length: 126 }, (_, i) => i < 63 ? i / 63 : 0);
 const sample = () => ({ label: "hello", vector: [...vector] });
 
-async function setup({ saved = "[]", denied = false, quota = false, faces = [], hands = [] } = {}) {
+async function setup({ saved = "[]", denied = false, quota = false, faces = [], hands = [], poses = [] } = {}) {
   const elements = new Map();
   const ctx = { clearRect() {}, strokeRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {} };
   function element(id = "") {
@@ -47,12 +47,15 @@ async function setup({ saved = "[]", denied = false, quota = false, faces = [], 
   const yolo = new vm.SourceTextModule(yoloSource, { context });
   await yolo.link(() => {});
   await yolo.evaluate();
-  const mockVision = new vm.SyntheticModule(["HandLandmarker", "FaceDetector", "FilesetResolver"], function () {
+  const mockVision = new vm.SyntheticModule(["HandLandmarker", "FaceDetector", "PoseLandmarker", "FilesetResolver"], function () {
     this.setExport("HandLandmarker", { HAND_CONNECTIONS: [], createFromOptions: async () => ({
       detectForVideo() { detects++; return { landmarks: hands }; }, close() {},
     }) });
     this.setExport("FaceDetector", { createFromOptions: async () => ({
       detectForVideo() { return { detections: faces }; }, close() {},
+    }) });
+    this.setExport("PoseLandmarker", { createFromOptions: async () => ({
+      detectForVideo() { return { landmarks: poses }; }, close() {},
     }) });
     this.setExport("FilesetResolver", { forVisionTasks: async () => ({}) });
   }, { context });
@@ -64,10 +67,10 @@ async function setup({ saved = "[]", denied = false, quota = false, faces = [], 
       throw new Error("3D deliberately unavailable in lifecycle tests");
     },
   });
-  await app.link((specifier) => specifier === "./recognition.js" ? recognition : yolo);
+  await app.link((specifier) => specifier.startsWith("./recognition.js") ? recognition : yolo);
   await app.evaluate();
   return { api: app.namespace, elements, storage, metrics: () => ({ calls, stopped, detects }),
-    setDenied: (value) => { denied = value; }, setFaces: (value) => { faces = value; }, setClock: (value) => { clock = value; } };
+    setDenied: (value) => { denied = value; }, setFaces: (value) => { faces = value; }, setPoses: (value) => { poses = value; }, setClock: (value) => { clock = value; } };
 }
 
 test("camera denial re-enables start and a retry can start then release the camera", async () => {

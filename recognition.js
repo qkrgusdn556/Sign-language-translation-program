@@ -140,3 +140,19 @@ export function avatarWrist(point, face) {
   return { x: Math.max(-1.7, Math.min(1.7, x * 0.7)),
     y: Math.max(-1.25, Math.min(1.45, 0.82 + y * 0.7)), z: 0.65 };
 }
+
+export function poseArmTargets(pose, face) {
+  if (!Array.isArray(pose) || pose.length < 17 || !face) return null;
+  const chains = [[11, 13, 15], [12, 14, 16]].map((indices) => {
+    const points = indices.map((index) => pose[index]);
+    if (points.some((point) => !point || point.visibility < 0.5 || point.presence < 0.5)) return null;
+    const toAvatar = (point) => {
+      const target = avatarWrist(point, face);
+      return { ...target, source: point };
+    };
+    return { shoulder: toAvatar(points[0]), elbow: toAvatar(points[1]), wrist: toAvatar(points[2]) };
+  }).filter(Boolean);
+  if (chains.length !== 2) return null;
+  // Avatar is displayed as a mirror, so the smaller avatar x is screen-left.
+  return chains.sort((a, b) => a.shoulder.x - b.shoulder.x);
+}

@@ -1,5 +1,5 @@
-import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, faceReference, avatarWrist } from "./recognition.js";
-import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js";
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, faceReference, avatarWrist, poseArmTargets } from "./recognition.js?v=pose-arm-1";
+import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js?v=pose-arm-1";
 
 let THREE, createHuman, segment, connect, poseArms;
 let HAND_CONNECTIONS = [];
@@ -45,7 +45,10 @@ const els = {
 const state = {
   landmarker: null,
   faceDetector: null,
+  poseLandmarker: null,
   face: null,
+  pose: null,
+  poseArms: null,
   avatar: null,
   running: false,
   starting: false,
@@ -54,6 +57,7 @@ const state = {
   frameId: 0,
   lastVideoTime: -1,
   lastFrameAt: 0,
+  lastPoseAt: 0,
   lastVector: null,
   slots: [null, null],
   samples: [],
@@ -107,7 +111,7 @@ async function loadIcons() {
 async function loadAvatar() {
   try {
     THREE = await import("https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js");
-    ({ createHuman, segment, connect, poseArms } = await import("./humanoid.js"));
+    ({ createHuman, segment, connect, poseArms } = await import("./humanoid.js?v=pose-arm-1"));
     initAvatar();
     requestAnimationFrame(animateAvatar);
     els.avatarState.textContent = "대기 중";
@@ -124,8 +128,8 @@ async function startCamera() {
   els.trackingState.textContent = "모델 로딩";
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("카메라를 사용할 수 없는 브라우저입니다.");
-    if (!state.landmarker || !state.faceDetector) {
-      const { HandLandmarker, FaceDetector, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
+    if (!state.landmarker || !state.faceDetector || !state.poseLandmarker) {
+      const { HandLandmarker, FaceDetector, PoseLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
       HAND_CONNECTIONS = HandLandmarker.HAND_CONNECTIONS;
       const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm");
       const options = {
@@ -152,6 +156,17 @@ async function startCamera() {
             delegate: "CPU",
           },
           runningMode: "VIDEO", minDetectionConfidence: 0.6,
+        });
+      }
+      if (!state.poseLandmarker) {
+        els.trackingState.textContent = "팔 모델 로딩";
+        state.poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+            delegate: "CPU",
+          },
+          runningMode: "VIDEO", numPoses: 1,
+          minPoseDetectionConfidence: 0.6, minPosePresenceConfidence: 0.6, minTrackingConfidence: 0.6,
         });
       }
     }
@@ -231,6 +246,8 @@ function stopCamera(message) {
   els.video.srcObject = null;
   state.lastVector = null;
   state.face = null;
+  state.pose = null;
+  state.poseArms = null;
   state.stillness.reset();
   state.lastWrists = null;
   els.faceState.textContent = "얼굴 대기";
@@ -256,14 +273,19 @@ function loop(now) {
       const result = state.landmarker.detectForVideo(els.video, now);
       const faces = state.faceDetector.detectForVideo(els.video, now).detections;
       state.face = faceReference(faces, els.video.videoWidth, els.video.videoHeight);
+      if (now - state.lastPoseAt >= 90) {
+        state.lastPoseAt = now;
+        state.pose = state.poseLandmarker.detectForVideo(els.video, now).landmarks[0] || null;
+      }
+      state.poseArms = poseArmTargets(state.pose, state.face);
       els.faceState.textContent = state.face ? "얼굴 기준 연결됨" : faces.length > 1 ? "한 사람만 보여 주세요" : "얼굴 대기";
+      els.trackingState.textContent = state.poseArms ? "얼굴·팔 추적" : state.face ? "팔 대기" : "얼굴 대기";
       drawLandmarks(result);
       state.slots = assignHandSlots(result, state.slots);
       updateAvatar(state.face ? state.slots : [null, null], result);
       state.lastVector = state.face ? landmarksToVector(result.landmarks, state.face) : null;
       if (state.lastVector) {
-        els.trackingState.textContent = `${result.landmarks.length}손 추적`;
-        if (state.avatar) els.avatarState.textContent = `${result.landmarks.length}손 연결됨`;
+        if (state.avatar) els.avatarState.textContent = state.poseArms ? `팔·손 ${result.landmarks.length}개 연결됨` : `손 ${result.landmarks.length}개 연결됨 · 팔 대기`;
         predict(state.lastVector, now);
         evaluateYolo(result.landmarks, now);
       } else {
@@ -280,6 +302,8 @@ function loop(now) {
     if (now - state.lastFrameAt > 500 && (state.lastVector || state.face)) {
       state.lastVector = null;
       state.face = null;
+      state.pose = null;
+      state.poseArms = null;
       els.faceState.textContent = "얼굴 대기";
       state.slots = [null, null];
       state.stabilizer.reset();
@@ -296,6 +320,8 @@ function loop(now) {
     state.landmarker = null;
     state.faceDetector?.close();
     state.faceDetector = null;
+    state.poseLandmarker?.close();
+    state.poseLandmarker = null;
     notify("손 추적이 중단되었습니다. 카메라를 다시 시작해 주세요.", true);
   }
 }
@@ -357,6 +383,21 @@ function drawLandmarks(result) {
     ctx.beginPath();
     ctx.arc(x + state.face.x * width, y + state.face.y * height, 4 * Math.min(devicePixelRatio, 2), 0, Math.PI * 2);
     ctx.stroke();
+    ctx.strokeStyle = "#65dfb3";
+  }
+  if (state.poseArms) {
+    ctx.strokeStyle = "#bda9ff";
+    ctx.lineWidth = 3 * Math.min(devicePixelRatio, 2);
+    state.poseArms.forEach((arm) => {
+      const points = [arm.shoulder.source, arm.elbow.source, arm.wrist.source];
+      ctx.beginPath();
+      points.forEach((point, index) => {
+        const px = x + point.x * width;
+        const py = y + point.y * height;
+        if (index) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+      });
+      ctx.stroke();
+    });
     ctx.strokeStyle = "#65dfb3";
   }
   for (const landmarks of result.landmarks) {
@@ -562,7 +603,7 @@ function animateAvatar(time = 0) {
     rig.group.rotation.z = THREE.MathUtils.lerp(rig.group.rotation.z, rig.live ? 0 : idleRotation, alpha);
     setRigPoints(rig, rig.points);
   });
-  poseArms(state.avatar.arms, state.avatar.handRigs);
+  poseArms(state.avatar.arms, state.avatar.handRigs, state.poseArms);
   state.avatar.renderer.render(state.avatar.scene, state.avatar.camera);
 }
 

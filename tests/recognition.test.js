@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateSamples, landmarksToVector, distance, classify, createStabilizer, assignHandSlots, faceReference, faceRelativePoint, avatarWrist } from "../recognition.js";
+import { validateSamples, landmarksToVector, distance, classify, createStabilizer, assignHandSlots, faceReference, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
 
 const hand = (x = 0.3) => Array.from({ length: 21 }, (_, i) => ({ x: x + i * 0.003, y: 0.6 - i * 0.008, z: i * -0.002 }));
 const vector = landmarksToVector([hand()]);
@@ -98,4 +98,20 @@ test("missing, multiple or degenerate faces do not establish a reference", () =>
   assert.equal(faceReference([detection,detection],1000,600),null);
   assert.equal(faceReference([{boundingBox:{width:0,height:0}}],1000,600),null);
   assert.equal(faceReference([detection],1000,600).x,0.5);
+});
+
+test("pose arm targets retain shoulder, elbow and wrist order in mirror space", () => {
+  const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.99, presence: 0.99 }));
+  pose[11] = { x: 0.72, y: 0.45, visibility: 0.99, presence: 0.99 };
+  pose[13] = { x: 0.76, y: 0.6, visibility: 0.99, presence: 0.99 };
+  pose[15] = { x: 0.8, y: 0.38, visibility: 0.99, presence: 0.99 };
+  pose[12] = { x: 0.28, y: 0.45, visibility: 0.99, presence: 0.99 };
+  pose[14] = { x: 0.24, y: 0.6, visibility: 0.99, presence: 0.99 };
+  pose[16] = { x: 0.2, y: 0.38, visibility: 0.99, presence: 0.99 };
+  const arms = poseArmTargets(pose, face);
+  assert.equal(arms.length, 2);
+  assert.ok(arms[0].shoulder.x < arms[1].shoulder.x);
+  assert.equal(arms[0].wrist.source, pose[15]);
+  pose[13].visibility = 0.1;
+  assert.equal(poseArmTargets(pose, face), null);
 });

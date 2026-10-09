@@ -81,10 +81,13 @@ export function connect(mesh, start, end) {
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize());
 }
 
-export function poseArms(arms, rigs) {
+export function poseArms(arms, rigs, targets = null) {
   arms.forEach((arm, index) => {
     const wrist = rigs[index].group.position;
-    const elbow = new THREE.Vector3(arm.side * 0.96, Math.min(-0.66, wrist.y - 0.3), 0.22);
+    const target = targets?.[index];
+    const elbow = target
+      ? new THREE.Vector3(target.elbow.x, target.elbow.y, target.elbow.z)
+      : new THREE.Vector3(arm.side * 0.96, Math.min(-0.66, wrist.y - 0.3), 0.22);
     connect(arm.upper, arm.shoulder, elbow);
     connect(arm.lower, elbow, wrist);
     arm.elbow.position.copy(elbow);
