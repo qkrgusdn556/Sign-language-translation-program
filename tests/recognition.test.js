@@ -189,6 +189,19 @@ test("hand wrists calibrate the pose arm position into the camera coordinate sys
   assert.ok(arms[0].shoulder.source.x > 0.55);
 });
 
+test("avatar arm targets always begin at the avatar shoulder anchors", () => {
+  const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.99, presence: 0.99 }));
+  pose[11] = { x: 0.72, y: 0.45, visibility: 0.99, presence: 0.99 };
+  pose[13] = { x: 0.76, y: 0.6, visibility: 0.99, presence: 0.99 };
+  pose[15] = { x: 0.8, y: 0.38, visibility: 0.99, presence: 0.99 };
+  pose[12] = { x: 0.28, y: 0.45, visibility: 0.99, presence: 0.99 };
+  pose[14] = { x: 0.24, y: 0.6, visibility: 0.99, presence: 0.99 };
+  pose[16] = { x: 0.2, y: 0.38, visibility: 0.99, presence: 0.99 };
+  const arms = poseArmTargets(pose, face);
+  assert.deepEqual(arms[0].shoulder, { x: -0.68, y: -0.12, z: -0.08, source: pose[11], handAttached: false });
+  assert.deepEqual(arms[1].shoulder, { x: 0.68, y: -0.12, z: -0.08, source: pose[12], handAttached: false });
+});
+
 test("shoulder reference works without a face and scales with shoulder width", () => {
   const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.99, presence: 0.99 }));
   pose[11] = { x: 0.7, y: 0.45, visibility: 0.99, presence: 0.99 };

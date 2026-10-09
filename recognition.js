@@ -244,7 +244,8 @@ export function poseArmTargets(pose, reference, hands = []) {
   }).filter(Boolean);
   if (chains.length !== 2) return null;
   // Avatar is displayed as a mirror, so the smaller avatar x is screen-left.
-  chains.sort((a, b) => avatarWrist(a.shoulder, reference).x - avatarWrist(b.shoulder, reference).x);
+  // The camera is mirrored in the UI, so larger camera x is the avatar's screen-left arm.
+  chains.sort((a, b) => b.shoulder.x - a.shoulder.x);
 
   const corrections = chains.flatMap((chain, index) => {
     const handWrist = hands[index]?.[0];
@@ -261,13 +262,23 @@ export function poseArmTargets(pose, reference, hands = []) {
     x: Math.max(0, Math.min(1, point.x + correction.x)),
     y: Math.max(0, Math.min(1, point.y + correction.y)),
   });
-  const toTarget = (point, handAttached = false) => ({
-    ...avatarWrist(point, reference), source: point, handAttached,
-  });
   return chains.map((chain, index) => {
     const handWrist = hands[index]?.[0];
+    const shoulder = alignedPoint(chain.shoulder);
+    const anchor = { x: index === 0 ? -0.68 : 0.68, y: -0.12, z: -0.08 };
+    const toTarget = (point, handAttached = false) => {
+      const localX = (shoulder.x - point.x) / reference.scale;
+      const localY = (shoulder.y - point.y) * reference.aspect / reference.scale;
+      return {
+        x: Math.max(-1.7, Math.min(1.7, anchor.x + localX * 0.9)),
+        y: Math.max(-1.2, Math.min(1.3, anchor.y + localY * 0.9)),
+        z: 0.55,
+        source: point,
+        handAttached,
+      };
+    };
     return {
-      shoulder: toTarget(alignedPoint(chain.shoulder)),
+      shoulder: { ...anchor, source: shoulder, handAttached: false },
       elbow: toTarget(alignedPoint(chain.elbow)),
       wrist: toTarget(handWrist || alignedPoint(chain.wrist), Boolean(handWrist)),
     };

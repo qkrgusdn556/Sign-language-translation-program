@@ -1,4 +1,4 @@
-import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=pose-calibration-1";
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=shoulder-rig-1";
 import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js?v=pose-arm-1";
 
 let THREE, createHuman, segment, connect, poseArms;
@@ -513,7 +513,7 @@ function updateAvatar(slots, result) {
     rig.live = Boolean(hand);
     if (hand && state.shoulders) {
       const wrist = hand[0];
-      const target = avatarWrist(wrist, state.shoulders);
+      const target = state.poseArms?.[i]?.wrist || avatarWrist(wrist, state.shoulders);
       rig.targetPosition.set(target.x, target.y, target.z);
       const resultIndex = result?.landmarks.indexOf(hand);
       rig.targetPoints = handToAvatarPoints(result?.worldLandmarks?.[resultIndex] || hand);
