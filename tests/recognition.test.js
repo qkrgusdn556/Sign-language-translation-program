@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateSamples, landmarksToVector, distance, classify, createStabilizer, assignHandSlots, faceReference, faceLandmarksReference, poseFaceReference, selectFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
+import { validateSamples, landmarksToVector, distance, classify, createStabilizer, assignHandSlots, faceReference, faceLandmarksReference, poseFaceReference, shoulderReference, selectFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
 
 const hand = (x = 0.3) => Array.from({ length: 21 }, (_, i) => ({ x: x + i * 0.003, y: 0.6 - i * 0.008, z: i * -0.002 }));
 const vector = landmarksToVector([hand()]);
@@ -158,4 +158,16 @@ test("pose arm targets retain shoulder, elbow and wrist order in mirror space", 
   assert.equal(arms[0].wrist.source, pose[15]);
   pose[13].visibility = 0.1;
   assert.equal(poseArmTargets(pose, face), null);
+});
+
+test("shoulder reference works without a face and scales with shoulder width", () => {
+  const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.99, presence: 0.99 }));
+  pose[11] = { x: 0.7, y: 0.45, visibility: 0.99, presence: 0.99 };
+  pose[12] = { x: 0.3, y: 0.45, visibility: 0.99, presence: 0.99 };
+  const reference = shoulderReference(pose, 1000, 600);
+  assert.equal(reference.source, "shoulders");
+  assert.equal(reference.x, 0.5);
+  assert.ok(reference.scale > 0.39);
+  pose[11].visibility = 0.1;
+  assert.equal(shoulderReference(pose, 1000, 600), null);
 });

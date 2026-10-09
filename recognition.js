@@ -148,6 +148,23 @@ export function poseFaceReference(pose, width, height) {
   };
 }
 
+export function shoulderReference(pose, width, height) {
+  if (!Array.isArray(pose) || pose.length < 13 || !width || !height) return null;
+  const [leftShoulder, rightShoulder] = [pose[11], pose[12]];
+  const visible = (point) => point && (point.visibility ?? 1) >= 0.55 && (point.presence ?? 1) >= 0.55;
+  if (![leftShoulder, rightShoulder].every(visible)) return null;
+  const scale = Math.hypot(leftShoulder.x - rightShoulder.x, leftShoulder.y - rightShoulder.y);
+  if (scale < 0.06) return null;
+  return {
+    x: (leftShoulder.x + rightShoulder.x) / 2,
+    y: (leftShoulder.y + rightShoulder.y) / 2,
+    scale,
+    aspect: height / width,
+    box: null,
+    source: "shoulders",
+  };
+}
+
 export function faceLandmarksReference(faces, width, height) {
   if (!Array.isArray(faces) || faces.length !== 1 || !width || !height) return null;
   const landmarks = faces[0];

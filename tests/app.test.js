@@ -161,27 +161,24 @@ test("quota failures and invalid existing data cannot silently overwrite saved s
   assert.equal(corrupt.storage.get("sign-translator-samples"), "{broken");
 });
 
-test("face is required for capture, and sustained face loss invalidates samples", async () => {
+test("shoulders are required for capture, and shoulder loss invalidates samples", async () => {
   const hand = Array.from({length:21}, (_,i)=>({x:0.7+i*0.002,y:0.5-i*0.005,z:0}));
   const h = await setup({ hands: [hand] });
   await h.api.startCamera();
   h.api.loop(100);
   assert.equal(h.api.state.lastVector, null);
   assert.equal(h.elements.get("#sampleBtn").disabled, true);
-  h.setFaceLandmarks([Array.from({length:468}, (_, i) => ({x:0.4+(i%12)*0.018, y:0.2+(Math.floor(i/12)%12)*0.02}))]);
+  const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.99, presence: 0.99 }));
+  pose[11] = { x: 0.7, y: 0.45, visibility: 0.99, presence: 0.99 };
+  pose[12] = { x: 0.3, y: 0.45, visibility: 0.99, presence: 0.99 };
+  h.setPoses([pose]);
   h.elements.get("#camera").currentTime++;
   h.api.loop(200);
   assert.equal(h.api.state.lastVector.length, 130);
   assert.equal(h.elements.get("#sampleBtn").disabled, false);
-  h.setFaceLandmarks([]);
+  h.setPoses([]);
   h.elements.get("#camera").currentTime++;
   h.api.loop(300);
-  assert.equal(h.api.state.lastVector.length, 130);
-  assert.equal(h.elements.get("#sampleBtn").disabled, false);
-  h.elements.get("#camera").currentTime++;
-  h.api.loop(700);
-  h.elements.get("#camera").currentTime++;
-  h.api.loop(800);
   assert.equal(h.api.state.lastVector, null);
   assert.equal(h.elements.get("#sampleBtn").disabled, true);
 });

@@ -1,4 +1,4 @@
-import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, selectFaceReference, createFaceTracker, avatarWrist, poseArmTargets } from "./recognition.js?v=face-landmarks-1";
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=shoulder-tracking-1";
 import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js?v=pose-arm-1";
 
 let THREE, createHuman, segment, connect, poseArms;
@@ -44,11 +44,8 @@ const els = {
 
 const state = {
   landmarker: null,
-  faceLandmarker: null,
   poseLandmarker: null,
-  face: null,
-  faceTracker: createFaceTracker(),
-  detectedFaceLandmarks: [],
+  shoulders: null,
   pose: null,
   poseArms: null,
   avatar: null,
@@ -60,7 +57,6 @@ const state = {
   lastVideoTime: -1,
   lastFrameAt: 0,
   lastPoseAt: 0,
-  lastFaceAt: 0,
   lastVector: null,
   slots: [null, null],
   samples: [],
@@ -131,8 +127,8 @@ async function startCamera() {
   els.trackingState.textContent = "모델 로딩";
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("카메라를 사용할 수 없는 브라우저입니다.");
-    if (!state.landmarker || !state.faceLandmarker || !state.poseLandmarker) {
-      const { HandLandmarker, FaceLandmarker, PoseLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
+    if (!state.landmarker || !state.poseLandmarker) {
+      const { HandLandmarker, PoseLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
       HAND_CONNECTIONS = HandLandmarker.HAND_CONNECTIONS;
       const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm");
       const options = {
@@ -150,18 +146,6 @@ async function startCamera() {
           options.baseOptions.delegate = "CPU";
           state.landmarker = await HandLandmarker.createFromOptions(vision, options);
         }
-      }
-      if (!state.faceLandmarker) {
-        els.trackingState.textContent = "얼굴 랜드마크 모델 로딩";
-        state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-            delegate: "CPU",
-          },
-          runningMode: "VIDEO", numFaces: 2,
-          minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
-          outputFaceBlendshapes: false, outputFacialTransformationMatrixes: false,
-        });
       }
       if (!state.poseLandmarker) {
         els.trackingState.textContent = "팔 모델 로딩";
@@ -187,7 +171,6 @@ async function startCamera() {
     state.running = true;
     state.lastVideoTime = -1;
     state.lastPoseAt = 0;
-    state.lastFaceAt = 0;
     els.cameraEmpty.hidden = true;
     els.trackingState.textContent = "손 대기";
     state.frameId = requestAnimationFrame(loop);
@@ -252,16 +235,13 @@ function stopCamera(message) {
   els.video.pause();
   els.video.srcObject = null;
   state.lastVector = null;
-  state.face = null;
-  state.faceTracker.reset();
-  state.detectedFaceLandmarks = [];
+  state.shoulders = null;
   state.lastPoseAt = 0;
-  state.lastFaceAt = 0;
   state.pose = null;
   state.poseArms = null;
   state.stillness.reset();
   state.lastWrists = null;
-  els.faceState.textContent = "얼굴 대기";
+  els.faceState.textContent = "어깨 대기";
   state.slots = [null, null];
   state.stabilizer.reset();
   finishRecording(false);
@@ -285,28 +265,15 @@ function loop(now) {
       if (now - state.lastPoseAt >= 90) {
         state.lastPoseAt = now;
         state.pose = state.poseLandmarker.detectForVideo(els.video, now).landmarks[0] || null;
+        state.shoulders = shoulderReference(state.pose, els.video.videoWidth, els.video.videoHeight);
       }
-      if (now - state.lastFaceAt >= 120) {
-        state.lastFaceAt = now;
-        state.detectedFaceLandmarks = state.faceLandmarker.detectForVideo(els.video, now).faceLandmarks;
-      }
-      const faces = state.detectedFaceLandmarks;
-      const faceCandidate = selectFaceReference(faces, state.pose, els.video.videoWidth, els.video.videoHeight, state.detectedFaceLandmarks);
-      if (faces.length > 1) {
-        state.faceTracker.reset();
-        state.face = null;
-      } else {
-        state.face = state.faceTracker.update(faceCandidate, now);
-      }
-      state.poseArms = poseArmTargets(state.pose, state.face);
-      els.faceState.textContent = faces.length > 1 ? "한 사람만 보여 주세요"
-        : state.face?.source === "landmarks" ? "얼굴 랜드마크 연결됨"
-        : state.face?.source === "pose" ? "포즈 얼굴 기준 연결됨" : "얼굴 대기";
-      els.trackingState.textContent = state.poseArms ? "얼굴·팔 추적" : state.face ? "팔 대기" : "얼굴 대기";
+      state.poseArms = poseArmTargets(state.pose, state.shoulders);
+      els.faceState.textContent = state.shoulders ? "어깨 기준 연결됨" : "어깨 대기";
+      els.trackingState.textContent = state.poseArms ? "어깨·팔 추적" : state.shoulders ? "팔 대기" : "어깨 대기";
       drawLandmarks(result);
       state.slots = assignHandSlots(result, state.slots);
-      updateAvatar(state.face ? state.slots : [null, null], result);
-      state.lastVector = state.face ? landmarksToVector(result.landmarks, state.face) : null;
+      updateAvatar(state.shoulders ? state.slots : [null, null], result);
+      state.lastVector = state.shoulders ? landmarksToVector(result.landmarks, state.shoulders) : null;
       if (state.lastVector) {
         if (state.avatar) els.avatarState.textContent = state.poseArms ? `팔·손 ${result.landmarks.length}개 연결됨` : `손 ${result.landmarks.length}개 연결됨 · 팔 대기`;
         predict(state.lastVector, now);
@@ -315,21 +282,19 @@ function loop(now) {
         state.stillness.reset();
         state.lastWrists = null;
         state.stabilizer.reset();
-        els.trackingState.textContent = state.face ? "손 없음" : "얼굴 대기";
-        if (state.avatar) els.avatarState.textContent = state.face ? "손 대기" : "얼굴 기준 대기";
-        showPrediction("대기 중", state.face ? "손이 감지되지 않았습니다." : "얼굴과 양손이 함께 보이도록 해 주세요.", 0);
+        els.trackingState.textContent = state.shoulders ? "손 없음" : "어깨 대기";
+        if (state.avatar) els.avatarState.textContent = state.shoulders ? "손 대기" : "어깨 기준 대기";
+        showPrediction("대기 중", state.shoulders ? "손이 감지되지 않았습니다." : "양어깨와 손이 함께 보이도록 해 주세요.", 0);
       }
       captureFrame(now);
       updateControls();
     }
-    if (now - state.lastFrameAt > 500 && (state.lastVector || state.face)) {
+    if (now - state.lastFrameAt > 500 && (state.lastVector || state.shoulders)) {
       state.lastVector = null;
-      state.face = null;
-      state.faceTracker.reset();
-      state.detectedFaceLandmarks = [];
+      state.shoulders = null;
       state.pose = null;
       state.poseArms = null;
-      els.faceState.textContent = "얼굴 대기";
+      els.faceState.textContent = "어깨 대기";
       state.slots = [null, null];
       state.stabilizer.reset();
       updateAvatar(state.slots);
@@ -343,8 +308,6 @@ function loop(now) {
     stopCamera();
     state.landmarker?.close();
     state.landmarker = null;
-    state.faceLandmarker?.close();
-    state.faceLandmarker = null;
     state.poseLandmarker?.close();
     state.poseLandmarker = null;
     notify("손 추적이 중단되었습니다. 카메라를 다시 시작해 주세요.", true);
@@ -401,17 +364,6 @@ function drawLandmarks(result) {
   ctx.lineWidth = 2 * Math.min(devicePixelRatio, 2);
   ctx.strokeStyle = "#65dfb3";
   ctx.fillStyle = "#f5ce91";
-  if (state.face?.box) {
-    const box = state.face.box;
-    ctx.strokeStyle = "#83c9f4";
-    ctx.strokeRect(x + box.originX * scale, y + box.originY * scale, box.width * scale, box.height * scale);
-    ctx.strokeStyle = "#65dfb3";
-  }
-  if (state.face) {
-    ctx.beginPath();
-    ctx.arc(x + state.face.x * width, y + state.face.y * height, 4 * Math.min(devicePixelRatio, 2), 0, Math.PI * 2);
-    ctx.stroke();
-  }
   if (state.poseArms) {
     ctx.strokeStyle = "#bda9ff";
     ctx.lineWidth = 3 * Math.min(devicePixelRatio, 2);
@@ -559,9 +511,9 @@ function updateAvatar(slots, result) {
     const rig = state.avatar.handRigs[i];
     const hand = slots[i];
     rig.live = Boolean(hand);
-    if (hand && state.face) {
+    if (hand && state.shoulders) {
       const wrist = hand[0];
-      const target = avatarWrist(wrist, state.face);
+      const target = avatarWrist(wrist, state.shoulders);
       rig.targetPosition.set(target.x, target.y, target.z);
       const resultIndex = result?.landmarks.indexOf(hand);
       rig.targetPoints = handToAvatarPoints(result?.worldLandmarks?.[resultIndex] || hand);
@@ -724,10 +676,10 @@ function updateSampleUi() {
   els.sampleCount.textContent = String(state.samples.length);
 
   const counts = new Map();
-  const faceCounts = new Map();
+  const shoulderCounts = new Map();
   for (const sample of state.samples) {
     counts.set(sample.label, (counts.get(sample.label) || 0) + 1);
-    if (sample.vector.length === 130) faceCounts.set(sample.label, (faceCounts.get(sample.label) || 0) + 1);
+    if (sample.vector.length === 130) shoulderCounts.set(sample.label, (shoulderCounts.get(sample.label) || 0) + 1);
   }
 
   els.labels.replaceChildren(
@@ -737,9 +689,9 @@ function updateSampleUi() {
       const name = document.createElement("span");
       name.textContent = label;
       const amount = document.createElement("span");
-      const faceCount = faceCounts.get(label) || 0;
-      amount.className = faceCount >= 3 ? "sample-ready" : "sample-pending";
-      amount.textContent = `${count}개 · ${faceCount >= 3 ? "얼굴 기준 " + faceCount + "개" : "얼굴 기준 재학습 필요"}`;
+      const shoulderCount = shoulderCounts.get(label) || 0;
+      amount.className = shoulderCount >= 3 ? "sample-ready" : "sample-pending";
+      amount.textContent = `${count}개 · ${shoulderCount >= 3 ? "어깨 기준 " + shoulderCount + "개" : "어깨 기준 재학습 필요"}`;
       const button = document.createElement("button");
       button.className = "icon-button";
       button.textContent = "×";
