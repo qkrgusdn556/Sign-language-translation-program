@@ -11,7 +11,7 @@ const sample = () => ({ label: "hello", vector: [...vector] });
 
 async function setup({ saved = "[]", denied = false, quota = false, faceLandmarks = [], blendshapes = [{ categories: [] }], faceThrows = false, hands = [], poses = [] } = {}) {
   const elements = new Map();
-  const ctx = { clearRect() {}, strokeRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {} };
+  const ctx = { clearRect() {}, strokeRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {}, save() {}, restore() {} };
   function element(id = "") {
     return { id, value: id === "#labelInput" ? "hello" : "", textContent: "", hidden: false, disabled: false,
       style: {}, dataset: {}, children: [], checked: true, files: [], currentTime: 1, readyState: 2,
@@ -189,6 +189,7 @@ test("shoulders and mouth tracking are required for capture, and shoulder loss i
   h.api.loop(200);
   assert.equal(h.api.state.lastVector, null);
   assert.equal(h.elements.get("#sampleBtn").disabled, true);
+  h.setFaceLandmarks([Array.from({ length: 478 }, () => ({ x: 0.5, y: 0.4, z: 0 }))]);
   h.setBlendshapes([{ categories: [] }]);
   h.elements.get("#camera").currentTime++;
   h.api.loop(300);

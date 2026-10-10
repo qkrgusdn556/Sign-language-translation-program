@@ -66,6 +66,7 @@ const state = {
   lastFrameAt: 0,
   lastPoseAt: 0,
   lastMouthAt: 0,
+  lastMouthSeenAt: 0,
   mouth: null,
   mouthLandmarks: null,
   mouthFailed: false,
@@ -221,6 +222,7 @@ async function startCamera() {
     state.lastVideoTime = -1;
     state.lastPoseAt = 0;
     state.lastMouthAt = 0;
+    state.lastMouthSeenAt = 0;
     state.mouth = null;
     state.mouthLandmarks = null;
     state.mouthFailed = !state.faceLandmarker;
@@ -292,6 +294,7 @@ function stopCamera(message) {
   state.shoulders = null;
   state.lastPoseAt = 0;
   state.lastMouthAt = 0;
+  state.lastMouthSeenAt = 0;
   state.mouth = null;
   state.mouthLandmarks = null;
   state.mouthFailed = false;
@@ -330,8 +333,16 @@ function loop(now) {
         state.lastMouthAt = now;
         try {
           const faceResult = state.faceLandmarker?.detectForVideo(els.video, now);
-          state.mouth = faceResult?.faceBlendshapes?.length === 1 ? mouthFeatures(faceResult.faceBlendshapes[0]) : null;
-          state.mouthLandmarks = faceResult?.faceLandmarks?.length === 1 ? faceResult.faceLandmarks[0] : null;
+          if (faceResult?.faceBlendshapes?.length === 1 && faceResult.faceLandmarks?.length === 1) {
+            state.mouth = mouthFeatures(faceResult.faceBlendshapes[0]);
+            state.mouthLandmarks = faceResult.faceLandmarks[0];
+            state.lastMouthSeenAt = now;
+          } else {
+            // A raised hand can hide the mouth for a few frames. Keep the last lip features briefly,
+            // but never draw stale landmarks as though they were the current face position.
+            state.mouthLandmarks = null;
+            if (now - state.lastMouthSeenAt > 650) state.mouth = null;
+          }
         } catch (error) {
           console.error("Mouth tracking failed:", error);
           state.mouth = null;
@@ -344,7 +355,7 @@ function loop(now) {
       state.slots = assignHandSlots(result, state.slots);
       state.poseArms = poseArmTargets(state.pose, state.shoulders, state.slots);
       els.faceState.textContent = state.shoulders ? "어깨 기준 연결됨" : "어깨 대기";
-      els.mouthState.textContent = state.mouth ? "입모양 연결됨" : state.mouthFailed ? "입모양 엔진 오류" : "입모양 대기";
+      els.mouthState.textContent = state.mouth ? (state.mouthLandmarks ? "입모양 연결됨" : "입모양 잠시 유지") : state.mouthFailed ? "입모양 엔진 오류" : "입모양 대기";
       els.trackingState.textContent = state.mouthFailed ? "입모양 모델 오류" : state.poseArms ? (state.mouth ? "어깨·팔·입 추적" : "입모양 대기") : state.shoulders ? "팔 대기" : "어깨 대기";
       drawLandmarks(result);
       updateAvatar(state.shoulders ? state.slots : [null, null], result);
@@ -377,6 +388,7 @@ function loop(now) {
       state.mouth = null;
       state.mouthLandmarks = null;
       state.mouthFailed = false;
+      state.lastMouthSeenAt = 0;
       state.lastMouthAt = 0;
       els.faceState.textContent = "어깨 대기";
       els.mouthState.textContent = "입모양 대기";
