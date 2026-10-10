@@ -195,7 +195,7 @@ async function startCamera() {
         els.trackingState.textContent = "팔 모델 로딩";
         const poseOptions = {
           baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
             delegate: "GPU",
           },
           runningMode: "VIDEO", numPoses: 1,
