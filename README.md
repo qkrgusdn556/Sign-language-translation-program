@@ -59,3 +59,15 @@ npm test
 손 추적 API 참고: [MediaPipe Hand Landmarker 공식 문서](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/web_js).
 팔 관절 API 참고: [MediaPipe Pose Landmarker 공식 문서](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker/web_js).
 입모양 API 참고: [MediaPipe Face Landmarker 공식 문서](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/web_js).
+
+## Windows 데스크톱 앱
+
+`desktop_app.py`는 Chrome 없이 카메라를 직접 여는 PySide6 실험용 데스크톱 앱입니다. MediaPipe Holistic의 Heavy 설정으로 팔·손·입 윤곽을 표시합니다. 실행 파일은 `release/SignLanguageDesktop/SignLanguageDesktop.exe`이며, `_internal` 폴더와 함께 유지해야 합니다.
+
+개발 중에는 다음 명령으로 실행합니다.
+
+```sh
+python desktop_app.py
+```
+
+다시 EXE를 만들 때는 Windows에서 `build_desktop.bat`를 실행합니다. PySide6, OpenCV, MediaPipe, PyInstaller가 설치되어 있어야 합니다.

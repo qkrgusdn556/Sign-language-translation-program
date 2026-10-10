@@ -7,3 +7,10 @@ node_modules/
 Thumbs.db
 *-preview.png
 sign-samples-*.json
+__pycache__/
+build/
+dist/
+release/
+.pyinstaller-work*/
+*.spec
+pyinstaller-*.log
