@@ -9,7 +9,7 @@ const yoloSource = await readFile(new URL("../yolo.js", import.meta.url), "utf8"
 const vector = Array.from({ length: 126 }, (_, i) => i < 63 ? i / 63 : 0);
 const sample = () => ({ label: "hello", vector: [...vector] });
 
-async function setup({ saved = "[]", denied = false, quota = false, faceLandmarks = [], blendshapes = [{ categories: [] }], hands = [], poses = [] } = {}) {
+async function setup({ saved = "[]", denied = false, quota = false, faceLandmarks = [], blendshapes = [{ categories: [] }], faceThrows = false, hands = [], poses = [] } = {}) {
   const elements = new Map();
   const ctx = { clearRect() {}, strokeRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {} };
   function element(id = "") {
@@ -52,7 +52,7 @@ async function setup({ saved = "[]", denied = false, quota = false, faceLandmark
       detectForVideo() { detects++; return { landmarks: hands }; }, close() {},
     }) });
     this.setExport("FaceLandmarker", { createFromOptions: async () => ({
-      detectForVideo() { return { faceLandmarks, faceBlendshapes: blendshapes }; }, close() {},
+      detectForVideo() { if (faceThrows) throw new Error("face failure"); return { faceLandmarks, faceBlendshapes: blendshapes }; }, close() {},
     }) });
     this.setExport("PoseLandmarker", { createFromOptions: async () => ({
       detectForVideo() { return { landmarks: poses }; }, close() {},
@@ -106,6 +106,15 @@ test("a stalled video invalidates the previous hand pose", async () => {
   h.api.loop(700);
   assert.equal(h.api.state.lastVector, null);
   assert.equal(h.elements.get("#sampleBtn").disabled, true);
+});
+
+test("a mouth tracker error keeps the camera session running", async () => {
+  const h = await setup({ faceThrows: true });
+  await h.api.startCamera();
+  h.api.loop(100);
+  assert.equal(h.api.state.running, true);
+  assert.equal(h.api.state.mouthFailed, true);
+  assert.equal(h.elements.get("#mouthState").textContent, "입모양 엔진 오류");
 });
 
 test("recording saves observed frames as one motion sequence in a single undoable batch", async () => {

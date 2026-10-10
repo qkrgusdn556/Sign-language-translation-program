@@ -68,6 +68,7 @@ const state = {
   lastMouthAt: 0,
   mouth: null,
   mouthLandmarks: null,
+  mouthFailed: false,
   lastVector: null,
   slots: [null, null],
   samples: [],
@@ -173,7 +174,8 @@ async function startCamera() {
         const faceOptions = {
           baseOptions: {
             modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-            delegate: "GPU",
+            // The face blendshape model is more reliable on CPU while pose and hands remain on GPU.
+            delegate: "CPU",
           },
           runningMode: "VIDEO", numFaces: 1,
           minFaceDetectionConfidence: 0.45, minFacePresenceConfidence: 0.45, minTrackingConfidence: 0.45,
@@ -182,9 +184,10 @@ async function startCamera() {
         };
         try {
           state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, faceOptions);
-        } catch {
-          faceOptions.baseOptions.delegate = "CPU";
-          state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, faceOptions);
+        } catch (error) {
+          console.error("Mouth model failed to load:", error);
+          state.mouthFailed = true;
+          state.faceLandmarker = null;
         }
       }
       if (!state.poseLandmarker) {
@@ -220,6 +223,7 @@ async function startCamera() {
     state.lastMouthAt = 0;
     state.mouth = null;
     state.mouthLandmarks = null;
+    state.mouthFailed = !state.faceLandmarker;
     els.cameraEmpty.hidden = true;
     els.trackingState.textContent = "손 대기";
     state.frameId = requestAnimationFrame(loop);
@@ -290,6 +294,7 @@ function stopCamera(message) {
   state.lastMouthAt = 0;
   state.mouth = null;
   state.mouthLandmarks = null;
+  state.mouthFailed = false;
   state.pose = null;
   state.poseArms = null;
   state.stillness.reset();
@@ -323,15 +328,24 @@ function loop(now) {
       }
       if (now - state.lastMouthAt >= 90) {
         state.lastMouthAt = now;
-        const faceResult = state.faceLandmarker.detectForVideo(els.video, now);
-        state.mouth = faceResult.faceBlendshapes?.length === 1 ? mouthFeatures(faceResult.faceBlendshapes[0]) : null;
-        state.mouthLandmarks = faceResult.faceLandmarks?.length === 1 ? faceResult.faceLandmarks[0] : null;
+        try {
+          const faceResult = state.faceLandmarker?.detectForVideo(els.video, now);
+          state.mouth = faceResult?.faceBlendshapes?.length === 1 ? mouthFeatures(faceResult.faceBlendshapes[0]) : null;
+          state.mouthLandmarks = faceResult?.faceLandmarks?.length === 1 ? faceResult.faceLandmarks[0] : null;
+        } catch (error) {
+          console.error("Mouth tracking failed:", error);
+          state.mouth = null;
+          state.mouthLandmarks = null;
+          state.mouthFailed = true;
+          state.faceLandmarker?.close();
+          state.faceLandmarker = null;
+        }
       }
       state.slots = assignHandSlots(result, state.slots);
       state.poseArms = poseArmTargets(state.pose, state.shoulders, state.slots);
       els.faceState.textContent = state.shoulders ? "어깨 기준 연결됨" : "어깨 대기";
-      els.mouthState.textContent = state.mouth ? "입모양 연결됨" : "입모양 대기";
-      els.trackingState.textContent = state.poseArms ? (state.mouth ? "어깨·팔·입 추적" : "입모양 대기") : state.shoulders ? "팔 대기" : "어깨 대기";
+      els.mouthState.textContent = state.mouth ? "입모양 연결됨" : state.mouthFailed ? "입모양 엔진 오류" : "입모양 대기";
+      els.trackingState.textContent = state.mouthFailed ? "입모양 모델 오류" : state.poseArms ? (state.mouth ? "어깨·팔·입 추적" : "입모양 대기") : state.shoulders ? "팔 대기" : "어깨 대기";
       drawLandmarks(result);
       updateAvatar(state.shoulders ? state.slots : [null, null], result);
       state.lastVector = state.shoulders && state.mouth ? landmarksToVector(result.landmarks, state.shoulders, state.mouth) : null;
@@ -348,9 +362,9 @@ function loop(now) {
         state.lastWrists = null;
         state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
         state.stabilizer.reset();
-        els.trackingState.textContent = state.shoulders ? (state.mouth ? "손 없음" : "입모양 대기") : "어깨 대기";
+        els.trackingState.textContent = state.mouthFailed ? "입모양 모델 오류" : state.shoulders ? (state.mouth ? "손 없음" : "입모양 대기") : "어깨 대기";
         if (state.avatar) els.avatarState.textContent = state.shoulders ? "손 대기" : "어깨 기준 대기";
-        showPrediction("대기 중", !state.shoulders ? "양어깨와 손이 함께 보이도록 해 주세요." : !state.mouth ? "얼굴과 입이 밝게 보이도록 해 주세요." : "손이 감지되지 않았습니다.", 0);
+        showPrediction("대기 중", !state.shoulders ? "양어깨와 손이 함께 보이도록 해 주세요." : state.mouthFailed ? "입모양 모델을 다시 준비해 주세요. 카메라는 계속 실행됩니다." : !state.mouth ? "얼굴과 입이 밝게 보이도록 해 주세요." : "손이 감지되지 않았습니다.", 0);
       }
       captureFrame(now);
       updateControls();
@@ -362,6 +376,7 @@ function loop(now) {
       state.poseArms = null;
       state.mouth = null;
       state.mouthLandmarks = null;
+      state.mouthFailed = false;
       state.lastMouthAt = 0;
       els.faceState.textContent = "어깨 대기";
       els.mouthState.textContent = "입모양 대기";
