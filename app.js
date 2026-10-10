@@ -136,7 +136,7 @@ async function loadAvatar() {
     ({ createHuman, segment, connect, poseArms } = await import("./humanoid.js?v=pose-arm-1"));
     initAvatar();
     requestAnimationFrame(animateAvatar);
-    els.avatarState.textContent = state.running ? "카메라 안정화 중 · 3D 일시 정지" : "대기 중";
+    els.avatarState.textContent = state.running ? "3D 연결됨" : "대기 중";
   } catch {
     els.avatarState.textContent = "3D 화면을 불러오지 못했습니다. 네트워크 연결 후 새로고침해 주세요.";
   }
@@ -219,7 +219,7 @@ async function startCamera() {
     if (document.hidden) { stopCamera(); return; }
     state.stream.getVideoTracks().forEach((track) => track.addEventListener("ended", () => stopCamera("카메라 연결이 끊어졌습니다."), { once: true }));
     state.running = true;
-    setAvatarPaused(true);
+    setAvatarPaused(false);
     state.lastVideoTime = -1;
     state.lastPoseAt = 0;
     state.lastMouthAt = 0;
@@ -568,7 +568,7 @@ function initAvatar() {
     hasLiveHands: false,
     lastTime: 0,
     lastRenderAt: 0,
-    paused: state.running,
+    paused: false,
   };
 }
 
