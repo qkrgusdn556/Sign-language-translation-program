@@ -136,7 +136,7 @@ async function loadAvatar() {
     ({ createHuman, segment, connect, poseArms } = await import("./humanoid.js?v=pose-arm-1"));
     initAvatar();
     requestAnimationFrame(animateAvatar);
-    els.avatarState.textContent = "대기 중";
+    els.avatarState.textContent = state.running ? "카메라 안정화 중 · 3D 일시 정지" : "대기 중";
   } catch {
     els.avatarState.textContent = "3D 화면을 불러오지 못했습니다. 네트워크 연결 후 새로고침해 주세요.";
   }
@@ -219,6 +219,7 @@ async function startCamera() {
     if (document.hidden) { stopCamera(); return; }
     state.stream.getVideoTracks().forEach((track) => track.addEventListener("ended", () => stopCamera("카메라 연결이 끊어졌습니다."), { once: true }));
     state.running = true;
+    setAvatarPaused(true);
     state.lastVideoTime = -1;
     state.lastPoseAt = 0;
     state.lastMouthAt = 0;
@@ -310,7 +311,7 @@ function stopCamera(message) {
   els.canvas.getContext("2d").clearRect(0, 0, els.canvas.width, els.canvas.height);
   els.cameraEmpty.hidden = false;
   els.trackingState.textContent = "중지";
-  if (state.avatar) { updateAvatar([null, null]); els.avatarState.textContent = "대기 중"; }
+  if (state.avatar) { setAvatarPaused(false); updateAvatar([null, null]); els.avatarState.textContent = "대기 중"; }
   showPrediction("대기 중", "저장된 손모양과 비교할 준비가 되었습니다.", 0);
   updateControls();
   if (message) notify(message);
@@ -361,7 +362,7 @@ function loop(now) {
       updateAvatar(state.shoulders ? state.slots : [null, null], result);
       state.lastVector = state.shoulders && state.mouth ? landmarksToVector(result.landmarks, state.shoulders, state.mouth) : null;
       if (state.lastVector) {
-        if (state.avatar) els.avatarState.textContent = state.poseArms ? `팔·손 ${result.landmarks.length}개 연결됨` : `손 ${result.landmarks.length}개 연결됨 · 팔 대기`;
+        if (state.avatar && !state.avatar.paused) els.avatarState.textContent = state.poseArms ? `팔·손 ${result.landmarks.length}개 연결됨` : `손 ${result.landmarks.length}개 연결됨 · 팔 대기`;
         if (!state.recording) {
           const dynamicResult = updateMotionRecognition(state.lastVector, now);
           if (dynamicResult) applyRecognition(dynamicResult, "동작");
@@ -567,7 +568,14 @@ function initAvatar() {
     hasLiveHands: false,
     lastTime: 0,
     lastRenderAt: 0,
+    paused: state.running,
   };
+}
+
+function setAvatarPaused(paused) {
+  if (!state.avatar) return;
+  state.avatar.paused = paused;
+  if (paused) els.avatarState.textContent = "카메라 안정화 중 · 3D 일시 정지";
 }
 
 function createHandRig(material) {
@@ -632,7 +640,7 @@ function makeIdleHand(spread) {
 }
 
 function updateAvatar(slots, result) {
-  if (!state.avatar) return;
+  if (!state.avatar || state.avatar.paused) return;
   state.avatar.hasLiveHands = slots.some(Boolean);
   for (let i = 0; i < state.avatar.handRigs.length; i += 1) {
     const rig = state.avatar.handRigs[i];
@@ -696,6 +704,7 @@ function animateAvatar(time = 0) {
   if (!state.avatar) return;
   requestAnimationFrame(animateAvatar);
   if (document.hidden) return;
+  if (state.avatar.paused) return;
   const rect = els.avatarCanvas.getBoundingClientRect();
   if (rect.bottom < 0 || rect.top > innerHeight) return;
   if (time - state.avatar.lastRenderAt < 50) return;
