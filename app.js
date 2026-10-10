@@ -195,7 +195,7 @@ async function startCamera() {
         els.trackingState.textContent = "팔 모델 로딩";
         const poseOptions = {
           baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
             delegate: "GPU",
           },
           runningMode: "VIDEO", numPoses: 1,
@@ -319,17 +319,17 @@ function stopCamera(message) {
 function loop(now) {
   if (!state.running) return;
   try {
-    if (els.video.readyState >= 2 && els.video.currentTime !== state.lastVideoTime && now - state.lastFrameAt >= 45) {
+    if (els.video.readyState >= 2 && els.video.currentTime !== state.lastVideoTime && now - state.lastFrameAt >= 60) {
       state.lastVideoTime = els.video.currentTime;
       state.lastFrameAt = now;
       resizeCanvas();
       const result = state.landmarker.detectForVideo(els.video, now);
-      if (now - state.lastPoseAt >= 90) {
+      if (now - state.lastPoseAt >= 100) {
         state.lastPoseAt = now;
         state.pose = state.poseLandmarker.detectForVideo(els.video, now).landmarks[0] || null;
         state.shoulders = shoulderReference(state.pose, els.video.videoWidth, els.video.videoHeight);
       }
-      if (now - state.lastMouthAt >= 90) {
+      if (now - state.lastMouthAt >= 140) {
         state.lastMouthAt = now;
         try {
           const faceResult = state.faceLandmarker?.detectForVideo(els.video, now);
@@ -566,6 +566,7 @@ function initAvatar() {
     handRigs,
     hasLiveHands: false,
     lastTime: 0,
+    lastRenderAt: 0,
   };
 }
 
@@ -697,6 +698,8 @@ function animateAvatar(time = 0) {
   if (document.hidden) return;
   const rect = els.avatarCanvas.getBoundingClientRect();
   if (rect.bottom < 0 || rect.top > innerHeight) return;
+  if (time - state.avatar.lastRenderAt < 50) return;
+  state.avatar.lastRenderAt = time;
   resizeAvatar();
   const alpha = 1 - Math.exp(-Math.min(time - state.avatar.lastTime, 100) / 75);
   state.avatar.lastTime = time;

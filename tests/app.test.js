@@ -111,7 +111,7 @@ test("a stalled video invalidates the previous hand pose", async () => {
 test("a mouth tracker error keeps the camera session running", async () => {
   const h = await setup({ faceThrows: true });
   await h.api.startCamera();
-  h.api.loop(100);
+  h.api.loop(200);
   assert.equal(h.api.state.running, true);
   assert.equal(h.api.state.mouthFailed, true);
   assert.equal(h.elements.get("#mouthState").textContent, "입모양 엔진 오류");
@@ -192,12 +192,12 @@ test("shoulders and mouth tracking are required for capture, and shoulder loss i
   h.setFaceLandmarks([Array.from({ length: 478 }, () => ({ x: 0.5, y: 0.4, z: 0 }))]);
   h.setBlendshapes([{ categories: [] }]);
   h.elements.get("#camera").currentTime++;
-  h.api.loop(300);
+  h.api.loop(400);
   assert.equal(h.api.state.lastVector.length, 136);
   assert.equal(h.elements.get("#sampleBtn").disabled, false);
   h.setPoses([]);
   h.elements.get("#camera").currentTime++;
-  h.api.loop(400);
+  h.api.loop(500);
   assert.equal(h.api.state.lastVector, null);
   assert.equal(h.elements.get("#sampleBtn").disabled, true);
 });
