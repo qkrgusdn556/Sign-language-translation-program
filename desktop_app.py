@@ -4,22 +4,18 @@ from __future__ import annotations
 
 import sys
 import time
+import traceback
+from pathlib import Path
 
-import cv2
-import mediapipe as mp
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import (
-    QApplication,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMainWindow,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
-)
+try:
+    import cv2
+    import mediapipe as mp
+    from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+    from PySide6.QtGui import QImage, QPixmap
+    from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton, QVBoxLayout, QWidget
+except Exception:
+    Path.cwd().joinpath("desktop-error.log").write_text(traceback.format_exc(), encoding="utf-8")
+    raise
 
 
 class CameraWorker(QObject):
@@ -57,7 +53,10 @@ class CameraWorker(QObject):
             min_tracking_confidence=0.35,
         )
         drawing = mp.solutions.drawing_utils
-        styles = mp.solutions.drawing_styles
+        pose_points = drawing.DrawingSpec(color=(105, 223, 179), thickness=2, circle_radius=2)
+        pose_lines = drawing.DrawingSpec(color=(189, 169, 255), thickness=2, circle_radius=1)
+        hand_points = drawing.DrawingSpec(color=(245, 206, 145), thickness=2, circle_radius=3)
+        hand_lines = drawing.DrawingSpec(color=(101, 223, 179), thickness=2, circle_radius=1)
         last_fps_at, frames = time.monotonic(), 0
 
         try:
@@ -74,11 +73,11 @@ class CameraWorker(QObject):
 
                 if result.pose_landmarks:
                     drawing.draw_landmarks(rgb, result.pose_landmarks, mp.solutions.holistic.POSE_CONNECTIONS,
-                                           landmark_drawing_spec=styles.get_default_pose_landmarks_style())
+                                           landmark_drawing_spec=pose_points, connection_drawing_spec=pose_lines)
                 for hand in (result.left_hand_landmarks, result.right_hand_landmarks):
                     if hand:
                         drawing.draw_landmarks(rgb, hand, mp.solutions.hands.HAND_CONNECTIONS,
-                                               styles.get_default_hand_landmarks_style(), styles.get_default_hand_connections_style())
+                                               hand_points, hand_lines)
                 if result.face_landmarks:
                     mouth = [(61, 146), (146, 91), (91, 181), (181, 84), (84, 17), (17, 314), (314, 405),
                              (405, 321), (321, 375), (375, 291), (291, 61)]
@@ -213,4 +212,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception:
+        Path.cwd().joinpath("desktop-error.log").write_text(traceback.format_exc(), encoding="utf-8")
+        raise
