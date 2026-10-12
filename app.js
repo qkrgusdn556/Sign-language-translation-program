@@ -1,4 +1,4 @@
-import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, mouthFeatures, classify, classifySequence, motionMagnitude, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=mouth-features-1";
+import { STORAGE_KEY, MAX_SAMPLES, validateSamples, landmarksToVector, classify, classifySequence, trackedHandCount, motionMagnitude, createStabilizer, assignHandSlots, shoulderReference, avatarWrist, poseArmTargets } from "./recognition.js?v=one-hand-40";
 import { loadYolo11Classifier, inferYolo11, createStillnessGate } from "./yolo.js?v=pose-arm-1";
 
 let THREE, createHuman, segment, connect, poseArms;
@@ -32,9 +32,9 @@ const els = {
   clearConfirm: document.querySelector("#clearConfirm"),
   captureProgress: document.querySelector("#captureProgress"),
   similarity: document.querySelector("#similarity"),
+  nearestSample: document.querySelector("#nearestSample"),
   overlayToggle: document.querySelector("#overlayToggle"),
   faceState: document.querySelector("#faceState"),
-  mouthState: document.querySelector("#mouthState"),
   yoloModelFile: document.querySelector("#yoloModelFile"),
   yoloLabelsFile: document.querySelector("#yoloLabelsFile"),
   yoloLoadBtn: document.querySelector("#yoloLoadBtn"),
@@ -51,7 +51,6 @@ const els = {
 
 const state = {
   landmarker: null,
-  faceLandmarker: null,
   poseLandmarker: null,
   shoulders: null,
   pose: null,
@@ -65,17 +64,16 @@ const state = {
   lastVideoTime: -1,
   lastFrameAt: 0,
   lastPoseAt: 0,
-  lastMouthAt: 0,
-  lastMouthSeenAt: 0,
-  mouth: null,
-  mouthLandmarks: null,
-  mouthFailed: false,
   lastVector: null,
   slots: [null, null],
   samples: [],
   recording: null,
   undo: null,
   storageBlocked: false,
+  storageLoading: typeof fetch !== "undefined" || typeof indexedDB !== "undefined",
+  fileStorage: false,
+  saving: false,
+  database: null,
   stabilizer: createStabilizer(),
   yolo: null,
   yoloLoading: false,
@@ -88,6 +86,7 @@ const state = {
   speechStyle: "polite",
   polishedSentence: "",
   motion: { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] },
+  partialMatchAllowed: false,
 };
 
 els.startBtn.addEventListener("click", () => state.running ? stopCamera() : startCamera());
@@ -116,6 +115,8 @@ document.addEventListener("visibilitychange", () => {
 state.samples = loadSamples();
 updateSampleUi();
 renderSentence();
+if (typeof fetch !== "undefined") await initializeFileStorage();
+else if (state.storageLoading) await initializeSampleStorage();
 loadAvatar();
 loadIcons();
 
@@ -136,7 +137,7 @@ async function loadAvatar() {
     ({ createHuman, segment, connect, poseArms } = await import("./humanoid.js?v=pose-arm-1"));
     initAvatar();
     requestAnimationFrame(animateAvatar);
-    els.avatarState.textContent = state.running ? "3D 연결됨" : "대기 중";
+    els.avatarState.textContent = "대기 중";
   } catch {
     els.avatarState.textContent = "3D 화면을 불러오지 못했습니다. 네트워크 연결 후 새로고침해 주세요.";
   }
@@ -150,8 +151,8 @@ async function startCamera() {
   els.trackingState.textContent = "모델 로딩";
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("카메라를 사용할 수 없는 브라우저입니다.");
-    if (!state.landmarker || !state.faceLandmarker || !state.poseLandmarker) {
-      const { HandLandmarker, FaceLandmarker, PoseLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
+    if (!state.landmarker || !state.poseLandmarker) {
+      const { HandLandmarker, PoseLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304");
       HAND_CONNECTIONS = HandLandmarker.HAND_CONNECTIONS;
       const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm");
       const options = {
@@ -168,27 +169,6 @@ async function startCamera() {
         } catch {
           options.baseOptions.delegate = "CPU";
           state.landmarker = await HandLandmarker.createFromOptions(vision, options);
-        }
-      }
-      if (!state.faceLandmarker) {
-        els.trackingState.textContent = "입모양 모델 로딩";
-        const faceOptions = {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-            // The face blendshape model is more reliable on CPU while pose and hands remain on GPU.
-            delegate: "CPU",
-          },
-          runningMode: "VIDEO", numFaces: 1,
-          minFaceDetectionConfidence: 0.45, minFacePresenceConfidence: 0.45, minTrackingConfidence: 0.45,
-          outputFaceBlendshapes: true,
-          outputFacialTransformationMatrixes: false,
-        };
-        try {
-          state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, faceOptions);
-        } catch (error) {
-          console.error("Mouth model failed to load:", error);
-          state.mouthFailed = true;
-          state.faceLandmarker = null;
         }
       }
       if (!state.poseLandmarker) {
@@ -219,14 +199,8 @@ async function startCamera() {
     if (document.hidden) { stopCamera(); return; }
     state.stream.getVideoTracks().forEach((track) => track.addEventListener("ended", () => stopCamera("카메라 연결이 끊어졌습니다."), { once: true }));
     state.running = true;
-    setAvatarPaused(false);
     state.lastVideoTime = -1;
     state.lastPoseAt = 0;
-    state.lastMouthAt = 0;
-    state.lastMouthSeenAt = 0;
-    state.mouth = null;
-    state.mouthLandmarks = null;
-    state.mouthFailed = !state.faceLandmarker;
     els.cameraEmpty.hidden = true;
     els.trackingState.textContent = "손 대기";
     state.frameId = requestAnimationFrame(loop);
@@ -270,6 +244,7 @@ function unloadYolo() {
   state.stillness.reset();
   state.lastWrists = null;
   state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
+  state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
   els.yoloModelFile.value = "";
   els.yoloLabelsFile.value = "";
   els.yoloResult.textContent = "YOLO11 연결을 해제했습니다.";
@@ -285,7 +260,9 @@ function updateYoloUi(status) {
 }
 
 function stopCamera(message) {
+  state.partialMatchAllowed = false;
   state.running = false;
+  state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
   cancelAnimationFrame(state.frameId);
   state.stream?.getTracks().forEach((track) => track.stop());
   state.stream = null;
@@ -294,24 +271,18 @@ function stopCamera(message) {
   state.lastVector = null;
   state.shoulders = null;
   state.lastPoseAt = 0;
-  state.lastMouthAt = 0;
-  state.lastMouthSeenAt = 0;
-  state.mouth = null;
-  state.mouthLandmarks = null;
-  state.mouthFailed = false;
   state.pose = null;
   state.poseArms = null;
   state.stillness.reset();
   state.lastWrists = null;
   els.faceState.textContent = "어깨 대기";
-  els.mouthState.textContent = "입모양 대기";
   state.slots = [null, null];
   state.stabilizer.reset();
   finishRecording(false);
   els.canvas.getContext("2d").clearRect(0, 0, els.canvas.width, els.canvas.height);
   els.cameraEmpty.hidden = false;
   els.trackingState.textContent = "중지";
-  if (state.avatar) { setAvatarPaused(false); updateAvatar([null, null]); els.avatarState.textContent = "대기 중"; }
+  if (state.avatar) { updateAvatar([null, null]); els.avatarState.textContent = "대기 중"; }
   showPrediction("대기 중", "저장된 손모양과 비교할 준비가 되었습니다.", 0);
   updateControls();
   if (message) notify(message);
@@ -320,49 +291,26 @@ function stopCamera(message) {
 function loop(now) {
   if (!state.running) return;
   try {
-    if (els.video.readyState >= 2 && els.video.currentTime !== state.lastVideoTime && now - state.lastFrameAt >= 60) {
+    if (els.video.readyState >= 2 && els.video.currentTime !== state.lastVideoTime && now - state.lastFrameAt >= 45) {
       state.lastVideoTime = els.video.currentTime;
       state.lastFrameAt = now;
       resizeCanvas();
       const result = state.landmarker.detectForVideo(els.video, now);
-      if (now - state.lastPoseAt >= 100) {
+      if (now - state.lastPoseAt >= 90) {
         state.lastPoseAt = now;
         state.pose = state.poseLandmarker.detectForVideo(els.video, now).landmarks[0] || null;
         state.shoulders = shoulderReference(state.pose, els.video.videoWidth, els.video.videoHeight);
       }
-      if (now - state.lastMouthAt >= 140) {
-        state.lastMouthAt = now;
-        try {
-          const faceResult = state.faceLandmarker?.detectForVideo(els.video, now);
-          if (faceResult?.faceBlendshapes?.length === 1 && faceResult.faceLandmarks?.length === 1) {
-            state.mouth = mouthFeatures(faceResult.faceBlendshapes[0]);
-            state.mouthLandmarks = faceResult.faceLandmarks[0];
-            state.lastMouthSeenAt = now;
-          } else {
-            // A raised hand can hide the mouth for a few frames. Keep the last lip features briefly,
-            // but never draw stale landmarks as though they were the current face position.
-            state.mouthLandmarks = null;
-            if (now - state.lastMouthSeenAt > 650) state.mouth = null;
-          }
-        } catch (error) {
-          console.error("Mouth tracking failed:", error);
-          state.mouth = null;
-          state.mouthLandmarks = null;
-          state.mouthFailed = true;
-          state.faceLandmarker?.close();
-          state.faceLandmarker = null;
-        }
-      }
       state.slots = assignHandSlots(result, state.slots);
       state.poseArms = poseArmTargets(state.pose, state.shoulders, state.slots);
       els.faceState.textContent = state.shoulders ? "어깨 기준 연결됨" : "어깨 대기";
-      els.mouthState.textContent = state.mouth ? (state.mouthLandmarks ? "입모양 연결됨" : "입모양 잠시 유지") : state.mouthFailed ? "입모양 엔진 오류" : "입모양 대기";
-      els.trackingState.textContent = state.mouthFailed ? "입모양 모델 오류" : state.poseArms ? (state.mouth ? "어깨·팔·입 추적" : "입모양 대기") : state.shoulders ? "팔 대기" : "어깨 대기";
+      els.trackingState.textContent = state.poseArms ? "어깨·팔 추적" : state.shoulders ? "팔 대기" : "어깨 대기";
       drawLandmarks(result);
       updateAvatar(state.shoulders ? state.slots : [null, null], result);
-      state.lastVector = state.shoulders && state.mouth ? landmarksToVector(result.landmarks, state.shoulders, state.mouth) : null;
+      state.lastVector = state.shoulders ? landmarksToVector(result.landmarks, state.shoulders) : null;
       if (state.lastVector) {
-        if (state.avatar && !state.avatar.paused) els.avatarState.textContent = state.poseArms ? `팔·손 ${result.landmarks.length}개 연결됨` : `손 ${result.landmarks.length}개 연결됨 · 팔 대기`;
+        updatePartialTracking(state.lastVector, now);
+        if (state.avatar) els.avatarState.textContent = state.poseArms ? `팔·손 ${result.landmarks.length}개 연결됨` : `손 ${result.landmarks.length}개 연결됨 · 팔 대기`;
         if (!state.recording) {
           const dynamicResult = updateMotionRecognition(state.lastVector, now);
           if (dynamicResult) applyRecognition(dynamicResult, "동작");
@@ -370,13 +318,17 @@ function loop(now) {
           evaluateYolo(result.landmarks, now);
         }
       } else {
+        state.partialMatchAllowed = false;
         state.stillness.reset();
         state.lastWrists = null;
-        state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
         state.stabilizer.reset();
-        els.trackingState.textContent = state.mouthFailed ? "입모양 모델 오류" : state.shoulders ? (state.mouth ? "손 없음" : "입모양 대기") : "어깨 대기";
+        const preservingMotion = noteMotionGap(now);
+        els.trackingState.textContent = state.shoulders ? "손 없음" : "어깨 대기";
         if (state.avatar) els.avatarState.textContent = state.shoulders ? "손 대기" : "어깨 기준 대기";
-        showPrediction("대기 중", !state.shoulders ? "양어깨와 손이 함께 보이도록 해 주세요." : state.mouthFailed ? "입모양 모델을 다시 준비해 주세요. 카메라는 계속 실행됩니다." : !state.mouth ? "얼굴과 입이 밝게 보이도록 해 주세요." : "손이 감지되지 않았습니다.", 0);
+        if (preservingMotion) {
+          els.trackingState.textContent = "추적 복귀 대기";
+          els.confidence.textContent = "짧은 추적 누락입니다. 동작을 잠시 보존하며 결과 확정은 멈춥니다.";
+        } else showPrediction("대기 중", state.shoulders ? "손이 감지되지 않았습니다." : "양어깨와 손이 함께 보이도록 해 주세요.", 0);
       }
       captureFrame(now);
       updateControls();
@@ -386,13 +338,7 @@ function loop(now) {
       state.shoulders = null;
       state.pose = null;
       state.poseArms = null;
-      state.mouth = null;
-      state.mouthLandmarks = null;
-      state.mouthFailed = false;
-      state.lastMouthSeenAt = 0;
-      state.lastMouthAt = 0;
       els.faceState.textContent = "어깨 대기";
-      els.mouthState.textContent = "입모양 대기";
       state.slots = [null, null];
       state.stabilizer.reset();
       state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
@@ -403,13 +349,10 @@ function loop(now) {
     }
     if (state.recording && now >= state.recording.endAt) finishRecording(true);
     state.frameId = requestAnimationFrame(loop);
-  } catch (error) {
-    console.error("Sign tracking loop failed:", error);
+  } catch {
     stopCamera();
     state.landmarker?.close();
     state.landmarker = null;
-    state.faceLandmarker?.close();
-    state.faceLandmarker = null;
     state.poseLandmarker?.close();
     state.poseLandmarker = null;
     notify("손 추적이 중단되었습니다. 카메라를 다시 시작해 주세요.", true);
@@ -481,7 +424,6 @@ function drawLandmarks(result) {
     });
     ctx.strokeStyle = "#65dfb3";
   }
-  if (state.mouthLandmarks) drawMouthOutline(ctx, state.mouthLandmarks, x, y, width, height);
   for (const landmarks of result.landmarks) {
     ctx.beginPath();
     for (const connection of HAND_CONNECTIONS) {
@@ -497,30 +439,6 @@ function drawLandmarks(result) {
       ctx.fill();
     }
   }
-}
-
-function drawMouthOutline(ctx, landmarks, x, y, width, height) {
-  // MediaPipe Face Mesh outer-lip loop. The canvas is mirrored with the video in CSS.
-  const loop = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 78, 61];
-  if (!loop.every((index) => landmarks[index])) return;
-  ctx.save();
-  ctx.strokeStyle = "#ff9b55";
-  ctx.fillStyle = "#ffdc8a";
-  ctx.lineWidth = 2.5 * Math.min(devicePixelRatio, 2);
-  ctx.beginPath();
-  loop.forEach((index, position) => {
-    const point = landmarks[index];
-    const px = x + point.x * width;
-    const py = y + point.y * height;
-    if (position) ctx.lineTo(px, py); else ctx.moveTo(px, py);
-  });
-  ctx.stroke();
-  const upper = landmarks[13], lower = landmarks[14];
-  ctx.beginPath();
-  ctx.arc(x + upper.x * width, y + upper.y * height, 3.5 * Math.min(devicePixelRatio, 2), 0, Math.PI * 2);
-  ctx.arc(x + lower.x * width, y + lower.y * height, 3.5 * Math.min(devicePixelRatio, 2), 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
 }
 
 function initAvatar() {
@@ -567,15 +485,7 @@ function initAvatar() {
     handRigs,
     hasLiveHands: false,
     lastTime: 0,
-    lastRenderAt: 0,
-    paused: false,
   };
-}
-
-function setAvatarPaused(paused) {
-  if (!state.avatar) return;
-  state.avatar.paused = paused;
-  if (paused) els.avatarState.textContent = "카메라 안정화 중 · 3D 일시 정지";
 }
 
 function createHandRig(material) {
@@ -640,7 +550,7 @@ function makeIdleHand(spread) {
 }
 
 function updateAvatar(slots, result) {
-  if (!state.avatar || state.avatar.paused) return;
+  if (!state.avatar) return;
   state.avatar.hasLiveHands = slots.some(Boolean);
   for (let i = 0; i < state.avatar.handRigs.length; i += 1) {
     const rig = state.avatar.handRigs[i];
@@ -704,11 +614,8 @@ function animateAvatar(time = 0) {
   if (!state.avatar) return;
   requestAnimationFrame(animateAvatar);
   if (document.hidden) return;
-  if (state.avatar.paused) return;
   const rect = els.avatarCanvas.getBoundingClientRect();
   if (rect.bottom < 0 || rect.top > innerHeight) return;
-  if (time - state.avatar.lastRenderAt < 50) return;
-  state.avatar.lastRenderAt = time;
   resizeAvatar();
   const alpha = 1 - Math.exp(-Math.min(time - state.avatar.lastTime, 100) / 75);
   state.avatar.lastTime = time;
@@ -752,6 +659,7 @@ function recordSequence() {
   const label = els.labelInput.value.trim();
   if (!label || label.length > 40 || !state.running || !state.lastVector) return;
   state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
+  state.stabilizer.reset();
   state.recording = { label, frames: [], endAt: performance.now() + 2000, lastAt: -Infinity };
   els.captureProgress.hidden = false;
   els.captureProgress.value = 0;
@@ -762,7 +670,7 @@ function captureFrame(now) {
   const recording = state.recording;
   if (!recording) return;
   els.captureProgress.value = Math.min(1, 1 - (recording.endAt - now) / 2000);
-  if (now <= recording.endAt && state.lastVector && now - recording.lastAt >= 100) {
+  if (now <= recording.endAt && state.lastVector && now - recording.lastAt >= 80) {
     recording.frames.push([...state.lastVector]);
     recording.lastAt = now;
   }
@@ -779,48 +687,135 @@ function finishRecording(save) {
   updateControls();
 }
 
+function updatePartialTracking(vector, now) {
+  const count = trackedHandCount(vector);
+  state.partialMatchAllowed = count >= 1;
+}
+
 function updateMotionRecognition(vector, now) {
+  const gap = state.motion.missingSince;
+  if (gap !== undefined && now - gap > 220) {
+    state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
+    state.stabilizer.reset();
+  }
   const motion = state.motion;
-  const delta = motion.lastVector ? motionMagnitude(motion.lastVector, vector) : 0;
-  motion.lastVector = [...vector];
+  const resumed = motion.missingSince !== undefined;
+  if (resumed) {
+    delete motion.missingSince;
+    motion.lastVector = null;
+    motion.lastAt = -Infinity;
+    motion.quietSince = 0;
+    motion.deltas = [];
+  }
   if (now - motion.lastAt < 75) return null;
+  const delta = motion.lastVector ? motionMagnitude(motion.lastVector, vector) : 0;
+  const previous = motion.lastVector;
+  const countChanged = previous && trackedHandCount(previous) !== trackedHandCount(vector);
+  motion.lastVector = [...vector];
   motion.lastAt = now;
-  if (delta > 0.035) {
-    if (!motion.active) { motion.active = true; motion.frames = []; state.stabilizer.reset(); state.sentenceArmed = true; }
-    motion.frames.push([...vector]);
+  if (!motion.active) {
+    if (delta > 0.035) {
+      motion.active = true;
+      motion.frames = previous ? [[...previous]] : [];
+      motion.previewAt = -Infinity;
+      motion.deltas = [];
+      state.stabilizer.reset();
+      state.sentenceArmed = true;
+      showPrediction("동작 비교 중", "저장된 동작 샘플과 비교하고 있습니다.", 0);
+    } else return null;
+  }
+  motion.frames.push([...vector]);
+  previewMotion(now);
+  // A recovered coordinate is not evidence of motion or stillness across the gap.
+  if (resumed || countChanged) {
+    motion.quietSince = 0;
+    motion.deltas = [];
+    return null;
+  }
+  motion.deltas = [...(motion.deltas || []), delta].slice(-3);
+  const meanMotion = motion.deltas.reduce((sum, value) => sum + value, 0) / motion.deltas.length;
+  if (motion.deltas.length < 3 || meanMotion > 0.035) {
     motion.quietSince = 0;
     return null;
   }
-  if (!motion.active) return null;
-  motion.frames.push([...vector]);
   if (!motion.quietSince) motion.quietSince = now;
-  if (now - motion.quietSince < 220) return null;
+  if (now - motion.quietSince < 180) return null;
   const frames = motion.frames;
   motion.active = false;
   motion.frames = [];
+  motion.displayUntil = now + 2000;
   return frames.length >= 6 ? classifySequence(frames, state.samples) : null;
 }
 
+function noteMotionGap(now) {
+  const motion = state.motion;
+  if (!motion.active) return false;
+  motion.missingSince ??= now;
+  motion.quietSince = 0;
+  if (now - motion.missingSince <= 220) return true;
+  state.motion = { lastVector: null, lastAt: 0, active: false, quietSince: 0, frames: [] };
+  return false;
+}
+
+function previewMotion(now) {
+  const motion = state.motion;
+  if (motion.frames.length < 6 || now - (motion.previewAt ?? -Infinity) < 180) return;
+  motion.previewAt = now;
+  const result = classifySequence(motion.frames.slice(-32), state.samples);
+  const message = result.reason === "incompatible-tracking"
+    ? "감지된 손 개수 또는 좌표 형식이 저장 동작과 달라 비교할 수 없습니다. 양손이 보이는지 확인해 주세요."
+    : result.reason === "insufficient-motion"
+      ? "남은 손의 실제 움직임이 부족합니다. 마지막 자세만으로 동작을 확정하지 않습니다."
+      : result.status === "untrained"
+      ? "단어별 동작 샘플이 3개 이상 필요합니다."
+      : "동작 중 임시 비교 점수입니다. 끝난 동작을 비교한 뒤 확정합니다.";
+  showPrediction("동작 비교 중", message, result.similarity, result.label || result.nearestLabel, "동작", true);
+}
+
 function predict(vector, now) {
-  applyRecognition(state.stabilizer.update(classify(vector, state.samples), now), "정지");
+  if (now < (state.motion.displayUntil || 0)) return;
+  const motionCounts = new Map();
+  for (const sample of state.samples) if (sample.sequence) motionCounts.set(sample.label, (motionCounts.get(sample.label) || 0) + 1);
+  // Motion-trained words must not bypass their sequence via a final static pose.
+  const staticSamples = state.samples.filter(sample => (motionCounts.get(sample.label) || 0) < 3);
+  const result = classify(vector, staticSamples, { allowPartial: true });
+  if (result.status === "untrained" && state.samples.some(sample => sample.sequence)) {
+    const counts = new Map();
+    state.samples.filter(sample => sample.sequence).forEach(sample => counts.set(sample.label, (counts.get(sample.label) || 0) + 1));
+    const ready = [...counts.values()].some(count => count >= 3);
+    showPrediction(ready ? "동작 대기" : "동작 샘플 부족", ready
+      ? "동작이 끝나면 저장된 동작 샘플과 비교합니다."
+      : "DTW 동작 비교에는 단어별 동작 샘플이 3개 이상 필요합니다.", 0);
+    return;
+  }
+  applyRecognition(state.stabilizer.update(result, now), "정지");
 }
 
 function applyRecognition(result, mode) {
+  if (["match", "pending"].includes(result.status) && result.partial && !state.partialMatchAllowed) {
+    result = { ...result, status: "unknown", nearestLabel: result.label, reason: "missing-hands" };
+  }
   if (result.status === "untrained") {
     state.sentenceArmed = true;
     showPrediction("학습 필요", `${mode} 수어 이름별 샘플을 3개 이상 저장해 주세요.`, 0);
   } else if (result.status === "unknown") {
     state.sentenceArmed = true;
-    showPrediction("판단 보류", "저장된 손모양과 다르거나 후보가 비슷합니다.", result.similarity);
+    showPrediction("판단 보류", result.reason === "missing-hands"
+      ? "보이는 손이 없어 확정을 보류합니다."
+      : result.reason === "insufficient-motion"
+      ? "남은 손의 실제 움직임이 부족합니다. 마지막 자세만으로 동작을 확정하지 않습니다."
+      : result.reason === "incompatible-tracking"
+      ? "감지된 손 개수 또는 좌표 형식이 저장 동작과 달라 비교할 수 없습니다. 양손이 보이는지 확인해 주세요."
+      : "저장된 손모양과 다르거나 후보가 비슷합니다.", result.similarity, result.nearestLabel, mode, true);
   } else if (result.status === "pending") {
     state.sentenceArmed = true;
-    showPrediction("확인 중", "손모양을 비교하고 있습니다.", result.similarity);
+    showPrediction("확인 중", "손모양을 비교하고 있습니다.", result.similarity, result.label, mode, true);
   } else {
-    showPrediction(result.label, `${mode} 수어와 유사합니다.`, result.similarity);
+    showPrediction(result.label, result.partial ? `${mode} 수어와 유사합니다. 한 손 누락을 보완한 부분 비교입니다.` : `${mode} 수어와 유사합니다.`, result.similarity, result.label, mode);
     if (state.sentenceArmed || state.sentenceWords.at(-1) !== result.label) {
       state.sentenceWords.push(result.label);
       state.sentenceArmed = false;
-      state.polishedSentence = "";
+      state.polishedSentence = formatSentence(state.sentenceWords, state.speechStyle);
       renderSentence();
     }
   }
@@ -835,7 +830,7 @@ function clearSentence() {
 
 function setSpeechStyle(style) {
   state.speechStyle = style;
-  if (state.polishedSentence) polishCurrentSentence();
+  if (state.sentenceWords.length) polishCurrentSentence();
 }
 
 function polishCurrentSentence() {
@@ -862,7 +857,8 @@ function renderSentence() {
   els.polishSentenceBtn.disabled = !state.sentenceWords.length;
 }
 
-function showPrediction(label, message, confidence) {
+function showPrediction(label, message, confidence, nearestLabel = null, mode = "", tentative = false) {
+  els.nearestSample.textContent = nearestLabel ? `${mode}${tentative ? " 후보" : ""}: ${nearestLabel}` : "비교 샘플 없음";
   els.prediction.textContent = label;
   els.confidence.textContent = message;
   els.confidenceBar.style.width = `${Math.round(confidence * 100)}%`;
@@ -871,7 +867,7 @@ function showPrediction(label, message, confidence) {
 
 function updateControls() {
   const label = els.labelInput.value.trim();
-  const busy = Boolean(state.recording || state.importing);
+  const busy = Boolean(state.recording || state.importing || state.saving || state.storageLoading);
   const canCapture = state.running && Boolean(state.lastVector) && label.length > 0 && label.length <= 40 && !state.storageBlocked;
   els.startBtn.disabled = state.starting;
   els.startBtn.textContent = state.starting ? "준비 중" : state.running ? "카메라 중지" : "카메라 시작";
@@ -894,7 +890,7 @@ function updateSampleUi() {
   const motionCounts = new Map();
   for (const sample of state.samples) {
     counts.set(sample.label, (counts.get(sample.label) || 0) + 1);
-    if (sample.vector?.length === 136) shoulderCounts.set(sample.label, (shoulderCounts.get(sample.label) || 0) + 1);
+    if (sample.vector?.length === 130) shoulderCounts.set(sample.label, (shoulderCounts.get(sample.label) || 0) + 1);
     if (sample.sequence) motionCounts.set(sample.label, (motionCounts.get(sample.label) || 0) + 1);
   }
 
@@ -908,7 +904,7 @@ function updateSampleUi() {
       const shoulderCount = shoulderCounts.get(label) || 0;
       const motionCount = motionCounts.get(label) || 0;
       amount.className = shoulderCount >= 3 ? "sample-ready" : "sample-pending";
-      amount.textContent = `${count}개 · 입모양 포함 ${shoulderCount}개 · 동작 ${motionCount}개`;
+      amount.textContent = `${count}개 · 정지 ${shoulderCount}개 · 동작 ${motionCount}개`;
       const button = document.createElement("button");
       button.className = "icon-button";
       button.textContent = "×";
@@ -930,9 +926,11 @@ function updateSampleUi() {
 }
 
 function commitSamples(next, message, remember = true) {
+  if (state.saving || state.storageLoading) return false;
   if (state.storageBlocked) { notify("기존 저장 데이터를 읽지 못해 변경을 중지했습니다.", true); return false; }
   try {
     const checked = validateSamples(next);
+    if (state.fileStorage || state.database) return commitDatabaseSamples(checked, message, remember);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(checked));
     if (remember) state.undo = state.samples;
     state.samples = checked;
@@ -944,6 +942,106 @@ function commitSamples(next, message, remember = true) {
   } catch (error) {
     notify(error.name === "QuotaExceededError" ? "저장 공간이 부족합니다. 백업 후 불필요한 샘플을 정리해 주세요." : error.message, true);
     return false;
+  }
+}
+
+function databaseSamples(database, mode, samples) {
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction("samples", mode);
+    const store = transaction.objectStore("samples");
+    const request = mode === "readonly" ? store.get(STORAGE_KEY) : store.put(samples, STORAGE_KEY);
+    transaction.oncomplete = () => resolve(request.result);
+    transaction.onabort = () => reject(transaction.error || new Error("샘플 저장을 완료하지 못했습니다."));
+    transaction.onerror = () => reject(transaction.error || request.error);
+  });
+}
+
+async function fileSamples(samples) {
+  const response = await fetch("/api/samples", samples === undefined
+    ? { cache: "no-store" }
+    : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ samples }) });
+  if (!response.ok) throw new Error("컴퓨터 파일 저장에 실패했습니다. 로컬 서버 실행과 디스크 공간을 확인해 주세요.");
+  return response.json();
+}
+
+async function initializeFileStorage() {
+  try {
+    const saved = await fileSamples();
+    if (saved.samples !== null) {
+      state.samples = validateSamples(saved.samples);
+      state.storageBlocked = false;
+      els.notice.hidden = true;
+    } else {
+      if (typeof indexedDB !== "undefined") await initializeSampleStorage(true);
+      if (state.storageBlocked) throw new Error("기존 데이터를 읽지 못했습니다. 백업을 보존해 주세요.");
+      state.storageLoading = true;
+      await fileSamples(state.samples);
+    }
+    state.fileStorage = true;
+    const location = document.querySelector("#storageLocation");
+    if (location) location.textContent = "컴퓨터 파일";
+  } catch (error) {
+    state.storageBlocked = true;
+    notify(`${error.message} run_web.bat으로 실행해 주세요.`, true);
+  } finally {
+    state.storageLoading = false;
+    updateSampleUi();
+  }
+}
+
+async function initializeSampleStorage(readOnly = false) {
+  try {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("sign-translator", 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("samples");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error("다른 탭을 닫고 다시 열어 주세요."));
+    });
+    const saved = await databaseSamples(database, "readonly");
+    if (saved !== undefined) {
+      state.samples = validateSamples(saved);
+      state.storageBlocked = false;
+      els.notice.hidden = true;
+    } else if (!state.storageBlocked && !readOnly) {
+      // Keep the legacy copy untouched until the user explicitly changes data.
+      await databaseSamples(database, "readwrite", state.samples);
+    }
+    state.database = database;
+    database.onversionchange = () => {
+      database.close();
+      if (state.fileStorage) return;
+      state.storageBlocked = true;
+      updateControls();
+      notify("저장소가 변경되었습니다. 페이지를 새로고침해 주세요.", true);
+    };
+  } catch (error) {
+    state.storageBlocked = true;
+    notify(`저장소를 열지 못했습니다. 기존 데이터는 유지됩니다. ${error.message}`, true);
+  } finally {
+    state.storageLoading = false;
+    updateSampleUi();
+  }
+}
+
+async function commitDatabaseSamples(checked, message, remember) {
+  state.saving = true;
+  updateControls();
+  try {
+    if (state.fileStorage) await fileSamples(checked);
+    else await databaseSamples(state.database, "readwrite", checked);
+    if (remember) state.undo = state.samples;
+    state.samples = checked;
+    state.stabilizer.reset();
+    showPrediction("대기 중", "샘플이 변경되었습니다.", 0);
+    notify(message);
+    return true;
+  } catch (error) {
+    notify(error.name === "QuotaExceededError" ? "브라우저 저장 공간이 부족합니다. 백업을 저장해 주세요. 기존 샘플은 유지됩니다." : error.message, true);
+    return false;
+  } finally {
+    state.saving = false;
+    updateSampleUi();
   }
 }
 
@@ -963,9 +1061,9 @@ function clearSamples() {
   commitSamples([], "모든 샘플을 삭제했습니다. 되돌리기로 복구할 수 있습니다.");
 }
 
-function undoSamples() {
+async function undoSamples() {
   if (!state.undo || state.recording || state.importing) return;
-  if (commitSamples(state.undo, "직전 변경을 되돌렸습니다.", false)) {
+  if (await commitSamples(state.undo, "직전 변경을 되돌렸습니다.", false)) {
     state.undo = null;
     els.undoBtn.hidden = true;
     updateControls();
@@ -996,7 +1094,7 @@ async function importSamples() {
   state.importing = true;
   updateControls();
   try {
-    if (file.size > 16 * 1024 * 1024) throw new Error("16MB 이하의 샘플 파일만 불러올 수 있습니다.");
+    if (file.size > 64 * 1024 * 1024) throw new Error("64MB 이하의 샘플 파일만 불러올 수 있습니다.");
     const incoming = validateSamples(JSON.parse(await file.text()));
     const occurrences = new Map();
     state.samples.forEach((sample) => {
@@ -1011,7 +1109,7 @@ async function importSamples() {
     });
     if (state.samples.length + unique.length > MAX_SAMPLES) throw new Error(`샘플은 최대 ${MAX_SAMPLES}개까지 저장할 수 있습니다.`);
     if (!unique.length) notify("추가할 새 샘플이 없습니다.");
-    else commitSamples([...state.samples, ...unique], `${unique.length}개 샘플을 추가했습니다. 기존 샘플도 유지됩니다.`);
+    else await commitSamples([...state.samples, ...unique], `${unique.length}개 샘플을 추가했습니다. 기존 샘플도 유지됩니다.`);
   } catch (error) {
     notify(error instanceof SyntaxError ? "JSON 파일을 읽지 못했습니다. 기존 데이터는 유지됩니다." : error.message, true);
   } finally {

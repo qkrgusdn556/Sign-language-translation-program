@@ -1,9 +1,100 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateSamples, landmarksToVector, mouthFeatures, distance, classify, classifySequence, motionMagnitude, dtwDistance, createStabilizer, assignHandSlots, faceReference, faceLandmarksReference, poseFaceReference, shoulderReference, selectFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
+import { validateSamples, landmarksToVector, distance, classify, classifySequence, motionMagnitude, dtwDistance, createStabilizer, assignHandSlots, faceReference, faceLandmarksReference, poseFaceReference, shoulderReference, selectFaceReference, createFaceTracker, faceRelativePoint, avatarWrist, poseArmTargets } from "../recognition.js";
 
 const hand = (x = 0.3) => Array.from({ length: 21 }, (_, i) => ({ x: x + i * 0.003, y: 0.6 - i * 0.008, z: i * -0.002 }));
 const vector = landmarksToVector([hand()]);
+
+test("high-score held hands and count-only flicker never qualify as partial motion", () => {
+  const pair=[...vector.slice(0,63),...vector.slice(0,63)];
+  const rows=Array.from({length:3},()=>({label:"motion",sequence:Array.from({length:12},()=>pair)}));
+  const held=classifySequence(Array.from({length:12},()=>vector),rows);
+  assert.ok(held.similarity>=0.5);
+  assert.equal(held.reason,"insufficient-motion");
+  const flicker=classifySequence(Array.from({length:12},(_,i)=>i%2 ? pair : vector),rows);
+  assert.equal(flicker.status,"unknown");
+  assert.equal(flicker.reason,"insufficient-motion");
+});
+
+test("partial motion accepts 40 percent or more while weaker scores remain unknown", () => {
+  const pair = [...vector.slice(0,63),...vector.slice(0,63)];
+  const reference = Array.from({length:12},(_,t)=>pair.map((v,i)=>i===30 ? v+t*0.4 : v));
+  const rows = Array.from({length:3},()=>({label:"motion",sequence:reference}));
+  const input = offset => reference.map((frame,i)=>frame.map((v,j)=>i===0 && j>=63 ? 0 : v+offset));
+  const above = classifySequence(input(0.42),rows);
+  assert.ok(above.similarity>=0.4 && above.similarity<0.5);
+  assert.equal(above.partial,true);
+  assert.equal(above.status,"match");
+  const below = classifySequence(input(0.44),rows);
+  assert.ok(below.similarity<0.4);
+  assert.equal(below.status,"unknown");
+  const ambiguous = classifySequence(input(0.42),[...rows,...rows.map(row=>({...row,label:"other"}))]);
+  assert.equal(ambiguous.status,"unknown");
+  const longMissing = input(0.2).map(frame=>[...frame.slice(0,63),...Array(63).fill(0)]);
+  assert.equal(classifySequence(longMissing,rows).status,"match");
+  assert.equal(classify(input(0.32)[0],samples("motion",pair),{allowPartial:true}).status,"unknown");
+});
+
+test("partial hand distance follows the surviving hand and rejects absent or dissimilar hands", () => {
+  const other = hand().map((p,i) => ({...p,x:p.x+i*0.012}));
+  const pair = landmarksToVector([hand(),other]);
+  assert.equal(distance(vector,pair),Infinity);
+  assert.ok(Math.abs(distance(vector,pair,{allowPartial:true})-0.08)<1e-10);
+  assert.ok(Math.abs(distance(landmarksToVector([other]),pair,{allowPartial:true})-0.08)<1e-10);
+  assert.equal(distance(Array(126).fill(0),pair,{allowPartial:true}),Infinity);
+  const far = vector.map((v,i) => i<63 ? v+2 : v);
+  assert.equal(classify(far,samples("a",pair),{allowPartial:true}).status,"unknown");
+  assert.equal(classify(vector,samples("a",pair),{allowPartial:true}).partial,true);
+  assert.equal(classify(vector,[...samples("a",pair),...samples("b",pair)],{allowPartial:true}).status,"unknown");
+});
+
+test("DTW accepts short and sustained one-hand motion but withholds a held posture", () => {
+  const other = hand().map((p,i) => ({...p,x:p.x+i*0.012}));
+  const base = landmarksToVector([hand(),other]);
+  const reference = Array.from({length:12}, (_,t) => base.map((v,i) => i===30 ? v+t*0.4 : v));
+  const single = frame => [...frame.slice(0,63),...Array(63).fill(0)];
+  const short = reference.map((frame,i) => [0,11].includes(i) ? single(frame) : [...frame]);
+  const rows = Array.from({length:3},()=>({label:"motion",sequence:reference}));
+  assert.equal(dtwDistance(short,reference),Infinity);
+  const result = classifySequence(short,rows);
+  assert.equal(result.label,"motion");
+  assert.equal(result.partial,true);
+  assert.ok(result.similarity<=0.8);
+  const sustained = classifySequence(reference.map(single),rows);
+  assert.equal(sustained.status,"match");
+  const held = classifySequence(Array.from({length:12},()=>single(reference.at(-1))),rows);
+  assert.equal(held.status,"unknown");
+  assert.equal(held.reason,"insufficient-motion");
+});
+
+test("partial matches retain shoulder-relative position checks", () => {
+  const single = [...vector,0.1,0.2,0,0];
+  const pair = [...vector.slice(0,63),...vector.slice(0,63),0.1,0.2,3,3];
+  assert.ok(Math.abs(distance(single,pair,{allowPartial:true})-0.08)<1e-10);
+  const far = [...vector,9,9,0,0];
+  assert.ok(distance(far,pair,{allowPartial:true})>0.12);
+});
+
+test("ambiguous samples expose a nearest label without confirming it", () => {
+  const staticRows = ["a", "b"].flatMap(label => Array.from({length: 3}, () => ({label, vector})));
+  const result = classify(vector, staticRows);
+  assert.equal(result.status, "unknown");
+  assert.equal(result.nearestLabel, "a");
+  const sequence = Array.from({length: 6}, () => vector);
+  const motionRows = ["a", "b"].flatMap(label => Array.from({length: 3}, () => ({label, sequence})));
+  const motion = classifySequence(sequence, motionRows);
+  assert.equal(motion.status, "unknown");
+  assert.equal(motion.nearestLabel, "a");
+  const incompatible = classifySequence(sequence.map(frame => [...frame,0,0,0,0]), motionRows);
+  assert.equal(incompatible.nearestLabel, undefined);
+});
+
+test("motion detects finger changes without treating detector order changes as movement", () => {
+  const changed = vector.map((v, i) => i === 30 ? v + 0.5 : v);
+  assert.ok(motionMagnitude(vector, changed) > 0.035);
+  const other = hand().map((p, i) => ({ ...p, x: p.x + i * 0.012 }));
+  assert.equal(motionMagnitude(landmarksToVector([hand(), other]), landmarksToVector([other, hand()])), 0);
+});
 const samples = (label, v = vector, count = 3) => Array.from({ length: count }, () => ({ label, vector: [...v] }));
 
 test("legacy and versioned backups are accepted; malformed data is rejected", () => {
@@ -13,6 +104,17 @@ test("legacy and versioned backups are accepted; malformed data is rejected", ()
   for (const bad of [null, {}, { version: 4, samples: [] }, [{ label: "", vector }], [{ label: "a", vector: [1] }], [{ label: "a", vector: vector.map(() => NaN) }]]) {
     assert.throws(() => validateSamples(bad));
   }
+});
+
+test("mouth-era backups retain hand data without modifying original samples", () => {
+  const extended = [...vector, 0.1, 0.2, 0.3, 0.4, 1, 2, 3, 4, 5, 6];
+  const original = { version: 3, samples: [{ label: "hello", vector: extended }, { label: "move", sequence: Array.from({ length: 6 }, () => [...extended]) }] };
+  const before = JSON.stringify(original);
+  const loaded = validateSamples(original);
+  assert.deepEqual(loaded[0].vector, extended.slice(0, 130));
+  assert.equal(loaded[1].sequence[0].length, 130);
+  assert.equal(JSON.stringify(original), before);
+  assert.doesNotThrow(() => classify(loaded[0].vector, loaded));
 });
 
 test("normalization is translation and scale invariant", () => {
@@ -61,6 +163,15 @@ test("stable predictions require a continuous hold and reset after hand loss", (
   assert.equal(gate.update({ ...match, label: "b" }, 860).status, "pending");
 });
 
+test("default word confirmation takes 200ms without accepting a changed candidate early", () => {
+  const gate = createStabilizer();
+  const match = { status: "match", label: "a", similarity: 1 };
+  assert.equal(gate.update(match, 0).status, "pending");
+  assert.equal(gate.update(match, 199).status, "pending");
+  assert.equal(gate.update(match, 200).status, "match");
+  assert.equal(gate.update({ ...match, label: "b" }, 201).status, "pending");
+});
+
 test("single left hand and crossed hands keep their avatar slots", () => {
   const left = hand(0.8), right = hand(0.2);
   const category = (categoryName) => [{ categoryName, score: 0.98 }];
@@ -98,22 +209,6 @@ test("same shape at the face and chest produces different recognition results", 
   assert.equal(classify(nearVector,[...samples("face",nearVector),...samples("chest",chestVector)]).label,"face");
   assert.equal(classify(nearVector,samples("legacy")).status,"untrained");
   assert.equal(validateSamples({version:2,samples:samples("face",nearVector)}).length,3);
-});
-
-test("mouth blendshapes extend shoulder-relative vectors without changing wrist motion", () => {
-  const mouth = mouthFeatures({ categories: [
-    { categoryName: "jawOpen", score: 0.75 },
-    { categoryName: "mouthPucker", score: 0.25 },
-    { categoryName: "mouthSmileLeft", score: 2 },
-  ] });
-  assert.deepEqual(mouth, [0.75, 0, 0, 0.25, 1, 0]);
-  const mouthVector = landmarksToVector([hand()], face, mouth);
-  assert.equal(mouthVector.length, 136);
-  assert.equal(validateSamples([{ label: "mouth", vector: mouthVector }]).length, 1);
-  const alteredMouth = [...mouthVector];
-  alteredMouth[130] += 0.5;
-  assert.ok(distance(mouthVector, alteredMouth) > 0);
-  assert.equal(motionMagnitude(mouthVector, alteredMouth), 0);
 });
 
 test("face and shape features swap together when detection order changes", () => {

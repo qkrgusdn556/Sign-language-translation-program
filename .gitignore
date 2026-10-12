@@ -14,3 +14,4 @@ release/
 .pyinstaller-work*/
 *.spec
 pyinstaller-*.log
+data/

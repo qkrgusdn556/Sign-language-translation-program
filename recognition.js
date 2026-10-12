@@ -12,15 +12,16 @@ export function validateSamples(value) {
     }
     const validVector = (vector) => Array.isArray(vector) && [126, 130, 136].includes(vector.length) &&
       vector.every((n) => typeof n === "number" && Number.isFinite(n) && Math.abs(n) <= 100);
-    if (validVector(sample.vector)) return { label: sample.label.trim(), vector: [...sample.vector] };
+    const withoutMouth = (vector) => vector.length === 136 ? vector.slice(0, 130) : [...vector];
+    if (validVector(sample.vector)) return { label: sample.label.trim(), vector: withoutMouth(sample.vector) };
     if (Array.isArray(sample.sequence) && sample.sequence.length >= MIN_SEQUENCE_FRAMES && sample.sequence.length <= MAX_SEQUENCE_FRAMES && sample.sequence.every(validVector)) {
-      return { label: sample.label.trim(), sequence: sample.sequence.map((vector) => [...vector]) };
+      return { label: sample.label.trim(), sequence: sample.sequence.map(withoutMouth) };
     }
     throw new Error("유효하지 않은 샘플이 있습니다. 기존 데이터는 유지됩니다.");
   });
 }
 
-export function landmarksToVector(hands, face = null, mouth = null) {
+export function landmarksToVector(hands, face = null) {
   if (!hands?.length) return null;
   const vector = hands.slice(0, 2).flatMap((hand) => {
     const wrist = hand[0];
@@ -35,7 +36,6 @@ export function landmarksToVector(hands, face = null, mouth = null) {
     const positions = hands.slice(0, 2).flatMap((hand) => faceRelativePoint(hand[0], face));
     while (positions.length < 4) positions.push(0);
     vector.push(...positions);
-    if (mouth) vector.push(...mouth);
   }
   return vector;
 }
@@ -44,8 +44,26 @@ function handCount(vector) {
   return Number(vector.slice(0, 63).some((n) => n !== 0)) + Number(vector.slice(63, 126).some((n) => n !== 0));
 }
 
-export function distance(a, b) {
-  if (a.length !== b.length || handCount(a) !== handCount(b)) return Infinity;
+export function distance(a, b, { allowPartial = false } = {}) {
+  if (a.length !== b.length) return Infinity;
+  const countA = handCount(a), countB = handCount(b);
+  if (!countA || !countB) return Infinity;
+  if (countA !== countB) {
+    if (!allowPartial) return Infinity;
+    const single = countA === 1 ? a : b;
+    const pair = countA === 2 ? a : b;
+    const slot = single.slice(0, 63).some(n => n !== 0) ? 0 : 1;
+    const costs = [0, 1].map(target => {
+      let squared = 0;
+      for (let i = 0; i < 63; i++) squared += (single[slot * 63 + i] - pair[target * 63 + i]) ** 2;
+      squared /= 63;
+      if (a.length === 130) {
+        for (let i = 0; i < 2; i++) squared += 0.2 * (single[126 + slot * 2 + i] - pair[126 + target * 2 + i]) ** 2;
+      }
+      return Math.sqrt(squared) + 0.08;
+    });
+    return Math.min(...costs);
+  }
   let direct = 0;
   let swapped = 0;
   for (let i = 0; i < 126; i++) {
@@ -56,70 +74,96 @@ export function distance(a, b) {
   const dimensions = 63 * Math.max(1, handCount(a));
   direct /= dimensions;
   swapped /= dimensions;
-  if (a.length >= 130) {
+  if (a.length === 130) {
     for (let i = 0; i < 4; i++) {
       direct += 0.2 * (a[126 + i] - b[126 + i]) ** 2;
       swapped += 0.2 * (a[126 + i] - b[126 + (i + 2) % 4]) ** 2;
-    }
-    for (let i = 130; i < a.length; i++) {
-      direct += 0.15 * (a[i] - b[i]) ** 2;
-      swapped += 0.15 * (a[i] - b[i]) ** 2;
     }
   }
   return Math.sqrt(Math.min(direct, swapped));
 }
 
-export function mouthFeatures(blendshapes) {
-  const categories = Array.isArray(blendshapes?.categories) ? blendshapes.categories : [];
-  const scores = new Map(categories.map((category) => [category.categoryName, category.score]));
-  const names = ["jawOpen", "mouthClose", "mouthFunnel", "mouthPucker", "mouthSmileLeft", "mouthSmileRight"];
-  return names.map((name) => Math.max(0, Math.min(1, Number(scores.get(name)) || 0)));
-}
-
-export function classify(vector, samples) {
+export function classify(vector, samples, { allowPartial = false } = {}) {
   const counts = new Map();
-  const compatible = samples.filter((sample) => sample.vector.length === vector.length);
+  const compatible = samples.filter((sample) => sample.vector?.length === vector.length);
   for (const { label } of compatible) counts.set(label, (counts.get(label) || 0) + 1);
   const eligible = compatible.filter((sample) => counts.get(sample.label) >= 3);
   if (!eligible.length) return { status: "untrained", similarity: 0 };
   const groups = new Map();
   for (const sample of eligible) {
-    const d = distance(vector, sample.vector);
+    const d = distance(vector, sample.vector, { allowPartial });
     if (!Number.isFinite(d)) continue;
     if (!groups.has(sample.label)) groups.set(sample.label, []);
-    groups.get(sample.label).push(d);
+    groups.get(sample.label).push({ distance: d, partial: handCount(vector) !== handCount(sample.vector) });
   }
   const ranked = [...groups].map(([label, values]) => {
-    values.sort((a, b) => a - b);
+    values.sort((a, b) => a.distance - b.distance);
     const closest = values.slice(0, 3);
-    return { label, distance: closest.reduce((a, b) => a + b, 0) / closest.length };
+    return { label, distance: closest.reduce((sum, item) => sum + item.distance, 0) / closest.length, partial: closest.some(item => item.partial) };
   }).sort((a, b) => a.distance - b.distance);
   if (!ranked.length) return { status: "unknown", similarity: 0 };
   const best = ranked[0];
   // Conservative prototype heuristics, not a calibrated probability of correctness.
-  const similarity = Math.exp(-best.distance / 0.2);
+  const similarity = Math.min(best.partial ? 0.8 : 1, Math.exp(-best.distance / 0.2));
   const ambiguous = ranked[1] && ranked[1].distance - best.distance < 0.055;
-  if (best.distance > 0.3 || ambiguous) return { status: "unknown", similarity };
-  return { status: "match", label: best.label, similarity };
+  if (best.distance > (best.partial ? 0.12 : 0.3) || ambiguous) return { status: "unknown", similarity, nearestLabel: best.label, partial: best.partial };
+  return { status: "match", label: best.label, similarity, partial: best.partial };
 }
 
 export function motionMagnitude(previous, next) {
-  if (!previous || !next || previous.length !== next.length || previous.length < 130) return 0;
-  return Math.hypot(...previous.slice(126, 130).map((value, index) => next[126 + index] - value));
+  if (!previous || !next || previous.length !== next.length) return 0;
+  const shape = distance(previous.slice(0, 126), next.slice(0, 126));
+  const position = previous.length === 130
+    ? Math.min(
+      Math.hypot(...previous.slice(126).map((value, i) => next[126 + i] - value)),
+      Math.hypot(...previous.slice(126).map((value, i) => next[126 + (i + 2) % 4] - value)),
+    ) : 0;
+  return Number.isFinite(shape) ? Math.max(shape, position) : 0;
 }
 
-export function dtwDistance(sequenceA, sequenceB) {
-  if (!sequenceA?.length || !sequenceB?.length) return Infinity;
+export function dtwDistance(sequenceA, sequenceB, options = {}) {
+  return dtwComparison(sequenceA, sequenceB, options).distance;
+}
+
+function dtwComparison(sequenceA, sequenceB, { allowPartial = false } = {}) {
+  if (!sequenceA?.length || !sequenceB?.length) return { distance: Infinity, partial: false };
   const rows = sequenceA.length + 1, columns = sequenceB.length + 1;
   const matrix = Array.from({ length: rows }, () => Array(columns).fill(Infinity));
+  const parents = allowPartial ? Array.from({length: rows}, () => new Uint8Array(columns)) : null;
   matrix[0][0] = 0;
   for (let i = 1; i < rows; i += 1) {
     for (let j = 1; j < columns; j += 1) {
-      const cost = distance(sequenceA[i - 1], sequenceB[j - 1]);
-      matrix[i][j] = cost + Math.min(matrix[i - 1][j], matrix[i][j - 1], matrix[i - 1][j - 1]);
+      const cost = distance(sequenceA[i - 1], sequenceB[j - 1], { allowPartial });
+      const choices = [matrix[i - 1][j - 1], matrix[i - 1][j], matrix[i][j - 1]];
+      const best = Math.min(...choices);
+      matrix[i][j] = cost + best;
+      if (parents) parents[i][j] = choices.indexOf(best);
     }
   }
-  return matrix[rows - 1][columns - 1] / (sequenceA.length + sequenceB.length);
+  const score = matrix[rows - 1][columns - 1] / (sequenceA.length + sequenceB.length);
+  const missing = new Set();
+  if (parents && Number.isFinite(score)) {
+    let i = rows - 1, j = columns - 1;
+    while (i && j) {
+      if (handCount(sequenceA[i - 1]) !== handCount(sequenceB[j - 1])) missing.add(i - 1);
+      const direction = parents[i][j];
+      if (direction !== 2) i--;
+      if (direction !== 1) j--;
+    }
+  }
+  return { distance: score, partial: missing.size > 0 };
+}
+
+function hasObservedMotion(sequence) {
+  let movingSteps = 0, excursion = 0;
+  const anchors = new Map();
+  for (let i = 0; i < sequence.length; i++) {
+    const count = handCount(sequence[i]);
+    if (!anchors.has(count)) anchors.set(count, sequence[i]);
+    if (i && motionMagnitude(sequence[i - 1], sequence[i]) > 0.035) movingSteps++;
+    excursion = Math.max(excursion, motionMagnitude(anchors.get(count), sequence[i]));
+  }
+  return movingSteps >= 3 && excursion >= 0.12;
 }
 
 export function classifySequence(sequence, samples) {
@@ -130,18 +174,22 @@ export function classifySequence(sequence, samples) {
   if (!trained.length) return { status: "untrained", similarity: 0 };
   const grouped = new Map();
   trained.forEach((sample) => {
-    const value = dtwDistance(sequence, sample.sequence);
+    const value = dtwComparison(sequence, sample.sequence, { allowPartial: true });
     if (!grouped.has(sample.label)) grouped.set(sample.label, []);
     grouped.get(sample.label).push(value);
   });
-  const ranked = [...grouped].map(([label, values]) => ({ label, distance: Math.min(...values) })).sort((a, b) => a.distance - b.distance);
+  const ranked = [...grouped].map(([label, values]) => ({ label, ...values.sort((a,b) => a.distance - b.distance)[0] })).sort((a, b) => a.distance - b.distance);
   const best = ranked[0];
-  const similarity = Math.exp(-best.distance / 0.24);
+  if (!Number.isFinite(best.distance)) return { status: "unknown", similarity: 0, reason: "incompatible-tracking" };
+  const similarity = Math.min(best.partial ? 0.8 : 1, Math.exp(-best.distance / 0.24));
   const ambiguous = ranked[1] && ranked[1].distance - best.distance < 0.04;
-  return best.distance > 0.35 || ambiguous ? { status: "unknown", similarity } : { status: "match", label: best.label, similarity };
+  if (best.partial && !hasObservedMotion(sequence)) return { status: "unknown", similarity, nearestLabel: best.label, partial: true, reason: "insufficient-motion" };
+  return (best.partial ? similarity < 0.4 : best.distance > 0.35) || ambiguous ? { status: "unknown", similarity, nearestLabel: best.label, partial: best.partial } : { status: "match", label: best.label, similarity, partial: best.partial };
 }
 
-export function createStabilizer(holdMs = 350) {
+export function trackedHandCount(vector) { return vector ? handCount(vector) : 0; }
+
+export function createStabilizer(holdMs = 200) {
   let candidate = null;
   let since = 0;
   return {

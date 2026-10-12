@@ -288,7 +288,6 @@ button:not(#startBtn) {
 
 .avatar-status { display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.85rem; }
 #faceState { margin: 0; color: #83c9f4; line-height: 1.45; }
-#mouthState { margin: 0; color: #f5ce91; line-height: 1.45; }
 
 .avatar-wrap {
   overflow: hidden;
@@ -340,7 +339,9 @@ button:not(#startBtn) {
 .app-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 24px; }
 .app-header .eyebrow { margin-bottom: 6px; }
 .local-badge { color: #a8b9bd; font-size: 0.8rem; }
-.meter-label { display: flex; justify-content: space-between; font-size: 0.85rem; color: #b2bec4; margin-bottom: 8px; }
+.meter-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; font-size: 0.85rem; color: #b2bec4; margin-bottom: 8px; }
+.meter-label strong { margin-left: auto; flex-shrink: 0; }
+.nearest-sample { min-width: 0; overflow-wrap: anywhere; color: #74dfc2; }
 .model-note { color: #9ea9ae; font-size: 0.78rem; line-height: 1.65; margin-bottom: 0; }
 #cameraEmpty { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; color: #7f9098; }
 .camera-symbol { font-size: 2rem; color: #597681; }
